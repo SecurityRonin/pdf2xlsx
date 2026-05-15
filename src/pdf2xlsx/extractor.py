@@ -2,6 +2,7 @@ from pathlib import Path
 import pdfplumber
 import fitz  # pymupdf
 from pdf2xlsx.models import ExtractedTable
+from pdf2xlsx.postprocess import postprocess_rows
 
 
 def _clean_rows(raw: list[list]) -> list[list[str]]:
@@ -34,7 +35,7 @@ def _extract_pdfplumber(path: Path) -> list[ExtractedTable]:
             for raw_table in page_tables:
                 if not raw_table:
                     continue
-                cleaned = _clean_rows(raw_table)
+                cleaned = postprocess_rows(_clean_rows(raw_table))
                 if _is_meaningful_table(cleaned):
                     tables.append(ExtractedTable(
                         page=page_num,
@@ -59,7 +60,7 @@ def _extract_pymupdf(path: Path) -> list[ExtractedTable]:
             rows = table.extract()
             if not rows:
                 continue
-            cleaned = _clean_rows(rows)
+            cleaned = postprocess_rows(_clean_rows(rows))
             if _is_meaningful_table(cleaned):
                 tables.append(ExtractedTable(
                     page=page_num,
