@@ -30,7 +30,12 @@ def _extract_pdfplumber(path: Path) -> list[ExtractedTable]:
     tables: list[ExtractedTable] = []
     with pdfplumber.open(path) as pdf:
         for page_num, page in enumerate(pdf.pages, start=1):
-            page_tables = page.extract_tables() or []
+            # text_x_tolerance=2 detects word spaces as narrow as 2 pts.
+            # Some PDFs (e.g. TimesNewRoman at small sizes) encode word gaps
+            # of ~2.7 pts which pdfplumber's default of 3 pts misses entirely.
+            page_tables = page.extract_tables(
+                table_settings={"text_x_tolerance": 2}
+            ) or []
             idx = 0
             for raw_table in page_tables:
                 if not raw_table:
