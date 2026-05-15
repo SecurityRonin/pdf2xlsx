@@ -80,3 +80,22 @@ def test_no_none_in_cells(annual_report):
         for row in t.rows:
             for cell in row:
                 assert cell is not None, f"None cell found in table on page {t.page}"
+
+
+def test_no_stuck_words_in_cells(general_ledger):
+    """Cells must not concatenate words without spaces (pdfplumber x_tolerance bug)."""
+    tables = extract_tables(general_ledger)
+    stuck = [
+        (t.page, cell)
+        for t in tables
+        for row in t.rows
+        for cell in row
+        if len(cell) > 20
+        and ' ' not in cell
+        and any(c.isupper() for c in cell[1:])
+        and not cell.startswith('$')
+        and not cell.replace(',', '').replace('.', '').replace('-', '').isnumeric()
+    ]
+    assert stuck == [], (
+        f"Found {len(stuck)} cell(s) with words stuck together, e.g. {stuck[0]}"
+    )
