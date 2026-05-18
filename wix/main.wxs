@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*"
+           Name="pdf2xlsx"
+           Language="1033"
+           Version="0.1.0"
+           Manufacturer="Security Ronin"
+           UpgradeCode="A1B2C3D4-E5F6-7890-ABCD-EF1234567890">
+
+    <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine"/>
+    <MajorUpgrade DowngradeErrorMessage="A newer version is already installed."/>
+    <MediaTemplate EmbedCab="yes"/>
+
+    <Feature Id="ProductFeature" Title="pdf2xlsx" Level="1">
+      <ComponentGroupRef Id="ProductComponents"/>
+    </Feature>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLDIR" Name="pdf2xlsx">
+          <Directory Id="BinDir" Name="bin"/>
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <ComponentGroup Id="ProductComponents" Directory="BinDir">
+      <Component Id="MainExecutable" Guid="*">
+        <File Id="pdf2xlsxEXE"
+              Source="dist\pdf2xlsx\pdf2xlsx.exe"
+              KeyPath="yes"/>
+      </Component>
+    </ComponentGroup>
+
+    <UIRef Id="WixUI_Minimal"/>
+    <WixVariable Id="WixUILicenseRtf" Value="wix\License.rtf"/>
+  </Product>
+</Wix>

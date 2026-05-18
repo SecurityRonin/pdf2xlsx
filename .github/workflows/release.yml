@@ -1,0 +1,173 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Binary builds ──────────────────────────────────────────────────────────
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+            artifact: pdf2xlsx-aarch64-apple-darwin.tar.gz
+
+          - target: x86_64-apple-darwin
+            os: macos-15
+            artifact: pdf2xlsx-x86_64-apple-darwin.tar.gz
+
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-24.04
+            artifact: pdf2xlsx-x86_64-unknown-linux-musl.tar.gz
+
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            artifact: pdf2xlsx-x86_64-windows.msi
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Qt platform deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libglib2.0-0 libdbus-1-3 libegl1 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
+            libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0
+
+      - name: Build with PyInstaller
+        run: uv run pyinstaller pdf2xlsx.spec --clean
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          tar czf "${{ matrix.artifact }}" -C dist pdf2xlsx
+
+      - name: Build MSI (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install wixtoolset -y --no-progress
+          $wix = "C:\Program Files (x86)\WiX Toolset v3.11\bin"
+          & "$wix\candle.exe" wix\main.wxs -out wix\main.wixobj
+          & "$wix\light.exe" wix\main.wixobj -ext WixUIExtension -out "${{ matrix.artifact }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  # ── GitHub Release ─────────────────────────────────────────────────────────
+  release:
+    name: GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+
+      - name: Dispatch Homebrew tap update
+        if: env.TAP_GITHUB_TOKEN != ''
+        env:
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          repository: h4x0r/homebrew-pdf2xlsx
+          event-type: new-release
+          client-payload: >-
+            {
+              "version": "${{ github.ref_name }}"
+            }
+
+  # ── Debian .deb ────────────────────────────────────────────────────────────
+  deb:
+    name: Build .deb (${{ matrix.arch }})
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            apt_arch: amd64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install deps + Qt + fpm
+        run: |
+          uv sync --group dev
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libglib2.0-0 libegl1 ruby ruby-dev
+          sudo gem install fpm --no-document
+
+      - name: Build binary
+        run: uv run pyinstaller pdf2xlsx.spec --clean
+
+      - name: Build .deb
+        run: |
+          VERSION="${{ github.ref_name }}" \
+          ARCH="${{ matrix.arch }}" \
+          bash packaging/build-deb.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pdf2xlsx-${{ matrix.arch }}.deb
+          path: "*.deb"
+
+  # ── Attach .deb to release ─────────────────────────────────────────────────
+  release-deb:
+    name: Attach .deb to release
+    needs: [release, deb]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "pdf2xlsx-*.deb"
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: "*.deb"
