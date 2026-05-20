@@ -1,9 +1,13 @@
+import re
 from pathlib import Path
 from typing import Callable
 import pdfplumber
 import fitz  # pymupdf
 from pdf2xlsx.models import ExtractedTable
 from pdf2xlsx.postprocess import postprocess_rows
+
+_YEAR_RE = re.compile(r'^20\d\d$')
+_LARGE_NUM_RE = re.compile(r'^[\d,]{4,}$')   # comma-formatted numbers ≥4 digits
 
 
 def _clean_rows(raw: list[list]) -> list[list[str]]:
@@ -79,6 +83,54 @@ def _extract_pymupdf(path: Path) -> list[ExtractedTable]:
     return tables
 
 
+def _row_is_data(row: list[str]) -> bool:
+    """True when a row contains financial data (year or large number) — not a header."""
+    cells = [c.strip() for c in row if c.strip()]
+    return any(
+        _YEAR_RE.match(c) or _LARGE_NUM_RE.match(c.replace(',', ''))
+        for c in cells
+    )
+
+
+def _merge_continuation_tables(tables: list[ExtractedTable]) -> list[ExtractedTable]:
+    """
+    Merge consecutive same-page sub-tables that pdfplumber splits at row-group
+    boundaries (e.g. one sub-table per executive in a compensation table).
+
+    Two consecutive tables are merged when:
+    - Same page and same source
+    - Same column count
+    - The second table's first row is a data row (contains a year or large number),
+      not an all-text column-header row indicating a genuinely new table.
+    """
+    if not tables:
+        return tables
+    result: list[ExtractedTable] = []
+    i = 0
+    while i < len(tables):
+        current = tables[i]
+        while i + 1 < len(tables):
+            nxt = tables[i + 1]
+            if nxt.page != current.page or nxt.source != current.source:
+                break
+            cur_cols = max((len(r) for r in current.rows), default=0)
+            nxt_cols = max((len(r) for r in nxt.rows), default=0)
+            if cur_cols != nxt_cols:
+                break
+            if not nxt.rows or not _row_is_data(nxt.rows[0]):
+                break
+            current = ExtractedTable(
+                page=current.page,
+                index=current.index,
+                rows=current.rows + nxt.rows,
+                source=current.source,
+            )
+            i += 1
+        result.append(current)
+        i += 1
+    return result
+
+
 def _deduplicate(
     primary: list[ExtractedTable],
     secondary: list[ExtractedTable],
@@ -101,8 +153,8 @@ def extract_tables(
     if not path.exists():
         raise FileNotFoundError(f"PDF not found: {path}")
 
-    primary = _extract_pdfplumber(path)
-    secondary = _extract_pymupdf(path)
+    primary = _merge_continuation_tables(_extract_pdfplumber(path))
+    secondary = _merge_continuation_tables(_extract_pymupdf(path))
     merged = _deduplicate(primary, secondary)
     result = [t for t in merged if not t.is_empty]
     if on_table:

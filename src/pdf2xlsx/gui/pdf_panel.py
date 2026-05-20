@@ -2,7 +2,7 @@ import fitz  # pymupdf
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
     QLabel, QPushButton, QSizePolicy, QListWidget, QListWidgetItem,
-    QSpinBox,
+    QSpinBox, QSplitter,
 )
 from PySide6.QtGui import QPixmap, QImage, QIcon
 from PySide6.QtCore import Qt, Signal, QSize, QTimer
@@ -37,17 +37,21 @@ class PdfPanel(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # Left: thumbnail strip
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        outer.addWidget(splitter)
+
+        # Left: thumbnail strip (resizable via splitter)
         self.thumb_list = QListWidget()
-        self.thumb_list.setFixedWidth(_THUMB_W + 16)
+        self.thumb_list.setMinimumWidth(60)
         self.thumb_list.setIconSize(QSize(_THUMB_W, _THUMB_H))
         self.thumb_list.setSpacing(2)
         self.thumb_list.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.thumb_list.currentRowChanged.connect(self._on_thumb_row_changed)
-        outer.addWidget(self.thumb_list)
+        splitter.addWidget(self.thumb_list)
 
-        # Right: nav bar + page view
-        right = QVBoxLayout()
+        # Right: nav bar + page view (in a container widget for the splitter)
+        right_widget = QWidget()
+        right = QVBoxLayout(right_widget)
         right.setContentsMargins(0, 0, 0, 0)
 
         nav = QHBoxLayout()
@@ -86,7 +90,10 @@ class PdfPanel(QWidget):
         self.scroll.setWidget(self.lbl_img)
         right.addWidget(self.scroll, 1)
 
-        outer.addLayout(right, 1)
+        splitter.addWidget(right_widget)
+        splitter.setSizes([_THUMB_W + 16, 800])
+        splitter.setCollapsible(0, False)
+        splitter.setCollapsible(1, False)
 
     # ------------------------------------------------------------------
     # Drag-and-drop
