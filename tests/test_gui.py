@@ -3,7 +3,7 @@ import pytest
 import shutil
 import unittest.mock as mock
 from pathlib import Path
-from PySide6.QtCore import Qt, QMimeData, QUrl
+from PySide6.QtCore import Qt, QMimeData, QUrl, QThread
 from PySide6.QtGui import QDropEvent, QDragEnterEvent
 
 FIXTURES = Path("tests/fixtures")
@@ -429,6 +429,181 @@ def test_pdf_page_change_selects_matching_tab(qtbot, tmp_path):
     qtbot.mouseClick(win.pdf_panel.btn_next, Qt.MouseButton.LeftButton)
     assert win.xlsx_panel.tab_widget.currentIndex() == 1, (
         "Navigating to page 2 must select the tab for page 2's table"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Thumbnail panel
+# ---------------------------------------------------------------------------
+
+def test_pdf_panel_has_thumbnail_list(qtbot):
+    from pdf2xlsx.gui.pdf_panel import PdfPanel
+    panel = PdfPanel()
+    qtbot.addWidget(panel)
+    assert hasattr(panel, "thumb_list"), "PdfPanel must have a thumb_list QListWidget"
+
+
+def test_pdf_panel_thumbnail_count_matches_pages(qtbot, tmp_path):
+    from pdf2xlsx.gui.pdf_panel import PdfPanel
+    dst = str(tmp_path / "multi.pdf")
+    shutil.copy(FIXTURES / "annual_report.pdf", dst)
+    panel = PdfPanel()
+    qtbot.addWidget(panel)
+    panel.load_pdf(dst)
+    n_pages = panel._doc.page_count
+    assert panel.thumb_list.count() == n_pages, (
+        f"Expected {n_pages} thumbnails, got {panel.thumb_list.count()}"
+    )
+
+
+def test_pdf_panel_thumb_click_navigates(qtbot, tmp_path):
+    from pdf2xlsx.gui.pdf_panel import PdfPanel
+    dst = str(tmp_path / "multi.pdf")
+    shutil.copy(FIXTURES / "annual_report.pdf", dst)
+    panel = PdfPanel()
+    qtbot.addWidget(panel)
+    panel.load_pdf(dst)
+    panel.thumb_list.setCurrentRow(2)  # click 3rd thumbnail (0-indexed)
+    assert panel.current_page == 2, (
+        f"Expected page 2 after clicking thumb 2, got {panel.current_page}"
+    )
+
+
+def test_current_thumbnail_highlighted_on_navigate(qtbot, tmp_path):
+    from pdf2xlsx.gui.pdf_panel import PdfPanel
+    dst = str(tmp_path / "multi.pdf")
+    shutil.copy(FIXTURES / "annual_report.pdf", dst)
+    panel = PdfPanel()
+    qtbot.addWidget(panel)
+    panel.load_pdf(dst)
+    panel._next_page()
+    assert panel.thumb_list.currentRow() == panel.current_page, (
+        "Highlighted thumbnail must match current page"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Page jump spinbox
+# ---------------------------------------------------------------------------
+
+def test_pdf_panel_has_spin_page(qtbot):
+    from pdf2xlsx.gui.pdf_panel import PdfPanel
+    from PySide6.QtWidgets import QSpinBox
+    panel = PdfPanel()
+    qtbot.addWidget(panel)
+    assert hasattr(panel, "spin_page"), "PdfPanel must have a spin_page QSpinBox"
+    assert isinstance(panel.spin_page, QSpinBox)
+
+
+def test_spin_page_range_set_on_load(qtbot, tmp_path):
+    from pdf2xlsx.gui.pdf_panel import PdfPanel
+    dst = str(tmp_path / "multi.pdf")
+    shutil.copy(FIXTURES / "annual_report.pdf", dst)
+    panel = PdfPanel()
+    qtbot.addWidget(panel)
+    panel.load_pdf(dst)
+    n_pages = panel._doc.page_count
+    assert panel.spin_page.maximum() == n_pages, (
+        f"spin_page.maximum() must equal page count ({n_pages})"
+    )
+    assert panel.spin_page.value() == 1, "spin_page must be 1 after loading"
+
+
+def test_spin_page_navigates_on_change(qtbot, tmp_path):
+    from pdf2xlsx.gui.pdf_panel import PdfPanel
+    dst = str(tmp_path / "multi.pdf")
+    shutil.copy(FIXTURES / "annual_report.pdf", dst)
+    panel = PdfPanel()
+    qtbot.addWidget(panel)
+    panel.load_pdf(dst)
+    panel.spin_page.setValue(3)
+    assert panel.current_page == 2, (  # 0-based
+        f"Expected page index 2 after spin_page=3, got {panel.current_page}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Progressive tab display
+# ---------------------------------------------------------------------------
+
+def test_xlsx_panel_has_add_table(qtbot):
+    from pdf2xlsx.gui.xlsx_panel import XlsxPanel
+    panel = XlsxPanel()
+    qtbot.addWidget(panel)
+    assert callable(getattr(panel, "add_table", None)), "XlsxPanel must have add_table()"
+
+
+def test_xlsx_panel_add_table_appends_tab(qtbot):
+    from pdf2xlsx.gui.xlsx_panel import XlsxPanel
+    from pdf2xlsx.models import ExtractedTable
+    panel = XlsxPanel()
+    qtbot.addWidget(panel)
+    t1 = ExtractedTable(page=1, index=0, rows=[["H", "V"], ["a", "1"]], source="pdfplumber")
+    t2 = ExtractedTable(page=2, index=0, rows=[["X", "Y"], ["b", "2"]], source="pdfplumber")
+    panel.add_table(t1)
+    assert panel.tab_widget.count() == 1
+    panel.add_table(t2)
+    assert panel.tab_widget.count() == 2
+
+
+def test_worker_emits_table_found_per_table(qtbot, tmp_path):
+    """ConversionWorker must emit table_found for each table as it's extracted."""
+    from pdf2xlsx.gui.main_window import _ConversionWorker
+    from pdf2xlsx.models import ExtractedTable
+    dst = str(tmp_path / "prog.pdf")
+    shutil.copy(FIXTURES / "term_sheet.pdf", dst)
+
+    fake1 = ExtractedTable(page=1, index=0, rows=[["A", "B"], ["1", "2"]], source="pdfplumber")
+    fake2 = ExtractedTable(page=2, index=0, rows=[["C", "D"], ["3", "4"]], source="pdfplumber")
+
+    found = []
+    all_tables = [fake1, fake2]
+    call_count = [0]
+
+    def fake_extract(path, on_table=None):
+        for t in all_tables:
+            if on_table:
+                on_table(t)
+        return all_tables
+
+    with mock.patch("pdf2xlsx.extractor.extract_tables", side_effect=fake_extract):
+        worker = _ConversionWorker(dst)
+        worker.table_found.connect(found.append)
+        thread_obj = QThread()
+        worker.moveToThread(thread_obj)
+        thread_obj.started.connect(worker.run)
+        worker.finished.connect(thread_obj.quit)
+        worker.error.connect(thread_obj.quit)
+        thread_obj.start()
+        qtbot.waitSignal(thread_obj.finished, timeout=5000)
+
+    assert len(found) == 2, f"Expected 2 table_found emissions, got {len(found)}"
+
+
+# ---------------------------------------------------------------------------
+# Right panel: no resize on tab addition
+# ---------------------------------------------------------------------------
+
+def test_tab_widget_uses_scroll_buttons(qtbot):
+    """When there are many tabs, they must scroll rather than expanding the bar."""
+    from pdf2xlsx.gui.xlsx_panel import XlsxPanel
+    from pdf2xlsx.models import ExtractedTable
+    panel = XlsxPanel()
+    qtbot.addWidget(panel)
+    assert panel.tab_widget.usesScrollButtons(), (
+        "QTabWidget must use scroll buttons so tab bar doesn't expand indefinitely"
+    )
+
+
+def test_tab_widget_size_policy_ignored(qtbot):
+    """QTabWidget must not push the splitter when tabs are added."""
+    from pdf2xlsx.gui.xlsx_panel import XlsxPanel
+    from PySide6.QtWidgets import QSizePolicy
+    panel = XlsxPanel()
+    qtbot.addWidget(panel)
+    hp = panel.tab_widget.sizePolicy().horizontalPolicy()
+    assert hp == QSizePolicy.Policy.Ignored, (
+        "QTabWidget horizontal size policy must be Ignored so splitter sizes are stable"
     )
 
 
