@@ -130,7 +130,7 @@ class MainWindow(QMainWindow):
         self._tables = tables
         # Progressive display adds tabs via table_found; fall back to load_tables
         # if on_table was never called (e.g. in tests that mock extract_tables).
-        if self.xlsx_panel.tab_widget.count() == 0 and tables:
+        if self.xlsx_panel.combo.count() == 0 and tables:
             self.xlsx_panel.load_tables(tables)
         self.btn_convert.setEnabled(True)
         self.btn_save.setEnabled(True)

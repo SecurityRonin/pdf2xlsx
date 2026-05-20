@@ -2,7 +2,7 @@ import fitz  # pymupdf
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
     QLabel, QPushButton, QSizePolicy, QListWidget, QListWidgetItem,
-    QSpinBox, QSplitter,
+    QSpinBox, QSplitter, QToolButton,
 )
 from PySide6.QtGui import QPixmap, QImage, QIcon
 from PySide6.QtCore import Qt, Signal, QSize, QTimer
@@ -17,6 +17,10 @@ class PdfPanel(QWidget):
     pdf_dropped = Signal(str)   # local file path of the dropped PDF
     page_changed = Signal(int)  # 1-based page number after each navigation
 
+    _ZOOM_MIN = 0.25
+    _ZOOM_MAX = 4.0
+    _ZOOM_STEP = 0.25
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._doc = None
@@ -27,6 +31,19 @@ class PdfPanel(QWidget):
         self._thumb_timer = None
         self.setAcceptDrops(True)
         self._build_ui()
+
+    def _zoom_text(self) -> str:
+        return f"{int(self._zoom * 100)}%"
+
+    def _zoom_in(self):
+        self._zoom = min(self._ZOOM_MAX, round(self._zoom + self._ZOOM_STEP, 2))
+        self.lbl_zoom.setText(self._zoom_text())
+        self._render()
+
+    def _zoom_out(self):
+        self._zoom = max(self._ZOOM_MIN, round(self._zoom - self._ZOOM_STEP, 2))
+        self.lbl_zoom.setText(self._zoom_text())
+        self._render()
 
     # ------------------------------------------------------------------
     # UI construction
@@ -75,11 +92,26 @@ class PdfPanel(QWidget):
         self.btn_next.clicked.connect(self._next_page)
         self.btn_next.setEnabled(False)
 
+        self.btn_zoom_out = QPushButton("−")
+        self.btn_zoom_out.setFixedWidth(28)
+        self.btn_zoom_out.clicked.connect(self._zoom_out)
+
+        self.lbl_zoom = QLabel(self._zoom_text())
+        self.lbl_zoom.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
+        self.lbl_zoom.setFixedWidth(48)
+
+        self.btn_zoom_in = QPushButton("+")
+        self.btn_zoom_in.setFixedWidth(28)
+        self.btn_zoom_in.clicked.connect(self._zoom_in)
+
         nav.addWidget(self.btn_prev)
         nav.addStretch(1)
         nav.addWidget(self.spin_page)
         nav.addWidget(self.lbl_total)
         nav.addStretch(1)
+        nav.addWidget(self.btn_zoom_out)
+        nav.addWidget(self.lbl_zoom)
+        nav.addWidget(self.btn_zoom_in)
         nav.addWidget(self.btn_next)
         right.addLayout(nav)
 

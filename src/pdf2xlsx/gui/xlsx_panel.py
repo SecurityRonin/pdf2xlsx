@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QTabWidget, QTableWidget,
+    QWidget, QVBoxLayout, QComboBox, QStackedWidget, QTableWidget,
     QTableWidgetItem, QHeaderView, QAbstractScrollArea, QSizePolicy,
 )
 from PySide6.QtCore import Qt, Signal
@@ -21,47 +21,71 @@ def _col_letter(n: int) -> str:
 
 
 class XlsxPanel(QWidget):
-    table_selected = Signal(int)   # 1-based page number of the active tab
+    table_selected = Signal(int)   # 1-based page number of the active entry
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._tables = []
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        self.tab_widget = QTabWidget()
-        self.tab_widget.setUsesScrollButtons(True)
-        self.tab_widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
-        self.tab_widget.currentChanged.connect(self._on_tab_changed)
-        layout.addWidget(self.tab_widget)
+        layout.setSpacing(4)
+
+        self.combo = QComboBox()
+        self.combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.combo.currentIndexChanged.connect(self._on_combo_changed)
+        layout.addWidget(self.combo)
+
+        self.stack = QStackedWidget()
+        self.stack.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        layout.addWidget(self.stack, 1)
+
+    def _combo_label(self, table) -> str:
+        return f"p.{table.page} · {table.sheet_name}"
 
     def load_tables(self, tables):
         self._tables = list(tables)
-        self.tab_widget.clear()
+        self.combo.blockSignals(True)
+        self.combo.clear()
+        # Remove all stacked pages
+        while self.stack.count():
+            self.stack.removeWidget(self.stack.widget(0))
         for t in tables:
             tbl = self._make_table(t.rows)
-            self.tab_widget.addTab(tbl, t.sheet_name)
+            self.stack.addWidget(tbl)
+            self.combo.addItem(self._combo_label(t))
+        self.combo.blockSignals(False)
+        if self._tables:
+            self.combo.setCurrentIndex(0)
+            self.stack.setCurrentIndex(0)
 
     def add_table(self, table):
-        """Append a single table as a new tab (used for progressive display)."""
+        """Append a single table entry (used for progressive display)."""
         self._tables.append(table)
         tbl = self._make_table(table.rows)
-        self.tab_widget.addTab(tbl, table.sheet_name)
+        self.stack.addWidget(tbl)
+        self.combo.addItem(self._combo_label(table))
 
     def clear(self):
         self._tables = []
-        self.tab_widget.clear()
+        self.combo.blockSignals(True)
+        self.combo.clear()
+        self.combo.blockSignals(False)
+        while self.stack.count():
+            self.stack.removeWidget(self.stack.widget(0))
 
     def select_page(self, page: int):
-        """Select the first tab whose table is on the given 1-based page."""
+        """Select the first entry whose table is on the given 1-based page."""
         for i, t in enumerate(self._tables):
             if t.page == page:
-                self.tab_widget.blockSignals(True)
-                self.tab_widget.setCurrentIndex(i)
-                self.tab_widget.blockSignals(False)
+                self.combo.blockSignals(True)
+                self.combo.setCurrentIndex(i)
+                self.stack.setCurrentIndex(i)
+                self.combo.blockSignals(False)
                 break
 
-    def _on_tab_changed(self, index: int):
+    def _on_combo_changed(self, index: int):
         if 0 <= index < len(self._tables):
+            self.stack.setCurrentIndex(index)
             self.table_selected.emit(self._tables[index].page)
 
     def _make_table(self, rows) -> QTableWidget:
