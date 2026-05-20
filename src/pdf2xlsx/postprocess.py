@@ -164,6 +164,40 @@ def _consolidate_sparse_columns(
     return padded
 
 
+def _drop_paragraph_rows(rows: list[list[str]]) -> list[list[str]]:
+    """
+    Remove rows that are paragraph text captured below the real table.
+
+    pdfplumber sometimes extends the detected table region to include
+    adjacent prose paragraphs. A row is treated as a paragraph when ALL of:
+      - exactly one non-empty cell
+      - that cell has more than 12 words
+      - it contains sentence-ending structure (". " inside, or 2+ commas)
+      - it is NOT the first row (row 0 is always kept — it may be a long header)
+      - the table has at least one genuinely multi-cell row (not a 1-col table)
+    """
+    if not rows:
+        return rows
+    has_multi_cell = any(
+        sum(1 for c in row if c.strip()) > 1 for row in rows
+    )
+    if not has_multi_cell:
+        return rows  # single-column table — don't filter anything
+
+    result = []
+    for i, row in enumerate(rows):
+        non_empty = [c for c in row if c.strip()]
+        if (
+            i > 0
+            and len(non_empty) == 1
+            and len(non_empty[0].split()) > 12
+            and ('. ' in non_empty[0] or non_empty[0].count(',') >= 2)
+        ):
+            continue  # paragraph leaked from below table
+        result.append(row)
+    return result
+
+
 def postprocess_rows(rows: list[list[str]]) -> list[list[str]]:
     """Clean up raw pdfplumber/pymupdf extraction artefacts."""
     rows = _attach_currency_prefixes(rows)
@@ -172,4 +206,5 @@ def postprocess_rows(rows: list[list[str]]) -> list[list[str]]:
     rows = _consolidate_sparse_columns(rows)
     rows = _drop_empty_columns(rows)
     rows = _drop_empty_rows(rows)
+    rows = _drop_paragraph_rows(rows)
     return rows
