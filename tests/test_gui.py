@@ -436,6 +436,17 @@ def test_pdf_page_change_selects_matching_tab(qtbot, tmp_path):
 # Thumbnail panel
 # ---------------------------------------------------------------------------
 
+def test_pdf_panel_thumb_strip_resizable(qtbot):
+    """The thumbnail strip must live inside a QSplitter so the user can resize it."""
+    from pdf2xlsx.gui.pdf_panel import PdfPanel
+    from PySide6.QtWidgets import QSplitter
+    panel = PdfPanel()
+    qtbot.addWidget(panel)
+    assert isinstance(panel.thumb_list.parentWidget(), QSplitter), (
+        "thumb_list must be a direct child of a QSplitter for drag-to-resize"
+    )
+
+
 def test_pdf_panel_has_thumbnail_list(qtbot):
     from pdf2xlsx.gui.pdf_panel import PdfPanel
     panel = PdfPanel()

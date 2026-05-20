@@ -1,7 +1,7 @@
 import pytest
 from pathlib import Path
 from collections import defaultdict
-from pdf2xlsx.extractor import extract_tables
+from pdf2xlsx.extractor import extract_tables, _merge_continuation_tables
 from pdf2xlsx.models import ExtractedTable
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -80,6 +80,65 @@ def test_no_none_in_cells(annual_report):
         for row in t.rows:
             for cell in row:
                 assert cell is not None, f"None cell found in table on page {t.page}"
+
+
+def test_merge_continuation_tables_same_page_merges():
+    """Sub-tables on the same page that start with a data row must be merged."""
+    header_row = ["Name and Principal Position", "Year", "Salary ($)", "Bonus ($)"]
+    t1 = ExtractedTable(page=5, index=0, source="pdfplumber", rows=[
+        header_row,
+        ["Tim Cook", "2023", "3,000,000", "0"],
+        ["Chief Executive Officer", "2022", "3,000,000", "0"],
+        ["", "2021", "3,000,000", "0"],
+    ])
+    t2 = ExtractedTable(page=5, index=1, source="pdfplumber", rows=[
+        ["Luca Maestri", "2023", "1,000,000", "0"],
+        ["Senior VP, CFO", "2022", "1,000,000", "0"],
+        ["", "2021", "1,000,000", "0"],
+    ])
+    merged = _merge_continuation_tables([t1, t2])
+    assert len(merged) == 1, f"Expected 1 merged table, got {len(merged)}"
+    assert len(merged[0].rows) == 7, f"Expected 7 rows, got {len(merged[0].rows)}"
+
+
+def test_merge_continuation_tables_different_pages_not_merged():
+    """Tables on different pages must never be merged."""
+    t1 = ExtractedTable(page=5, index=0, source="pdfplumber", rows=[
+        ["Name", "Year", "Amount"],
+        ["Alice", "2023", "100"],
+    ])
+    t2 = ExtractedTable(page=6, index=0, source="pdfplumber", rows=[
+        ["Bob", "2023", "200"],
+    ])
+    merged = _merge_continuation_tables([t1, t2])
+    assert len(merged) == 2, "Tables on different pages must not be merged"
+
+
+def test_merge_continuation_tables_header_boundary_not_merged():
+    """If the second table has a column-header first row, it is a new table."""
+    t1 = ExtractedTable(page=5, index=0, source="pdfplumber", rows=[
+        ["Item", "Q1", "Q2"],
+        ["Revenue", "100", "200"],
+    ])
+    t2 = ExtractedTable(page=5, index=1, source="pdfplumber", rows=[
+        ["Item", "Q3", "Q4"],   # all-text row → header of new table
+        ["Revenue", "300", "400"],
+    ])
+    merged = _merge_continuation_tables([t1, t2])
+    assert len(merged) == 2, "Second table with a header row must stay separate"
+
+
+def test_merge_continuation_tables_different_col_count_not_merged():
+    """Tables with different column counts must not be merged."""
+    t1 = ExtractedTable(page=5, index=0, source="pdfplumber", rows=[
+        ["Name", "Year", "Amount"],
+        ["Alice", "2023", "100"],
+    ])
+    t2 = ExtractedTable(page=5, index=1, source="pdfplumber", rows=[
+        ["Bob", "2023", "200", "Extra"],   # 4 cols vs 3
+    ])
+    merged = _merge_continuation_tables([t1, t2])
+    assert len(merged) == 2, "Tables with different column counts must not be merged"
 
 
 def test_no_stuck_words_in_cells(general_ledger):
