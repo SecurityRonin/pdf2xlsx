@@ -436,6 +436,49 @@ def test_pdf_page_change_selects_matching_tab(qtbot, tmp_path):
 # Thumbnail panel
 # ---------------------------------------------------------------------------
 
+def test_pdf_panel_thumb_default_width_accommodates_3digit_labels(qtbot):
+    """Thumbnail pane default width must leave space for 3-digit page labels."""
+    from pdf2xlsx.gui.pdf_panel import _THUMB_W
+    assert _THUMB_W >= 130, (
+        f"_THUMB_W={_THUMB_W}; must be ≥130 so '237' labels aren't cramped"
+    )
+
+
+def test_pdf_panel_thumb_strip_does_not_auto_widen(qtbot):
+    """Thumbnail strip width must stay constant when the PdfPanel is made wider."""
+    from pdf2xlsx.gui.pdf_panel import PdfPanel
+    from PySide6.QtWidgets import QSplitter
+    panel = PdfPanel()
+    qtbot.addWidget(panel)
+    panel.show()
+    panel.resize(900, 600)
+    qtbot.wait(100)
+    splitter = panel.thumb_list.parentWidget()
+    assert isinstance(splitter, QSplitter)
+    thumb_w = splitter.sizes()[0]
+    panel.resize(1400, 600)
+    qtbot.wait(100)
+    assert splitter.sizes()[0] == thumb_w, (
+        f"Thumb strip grew from {thumb_w}px to {splitter.sizes()[0]}px on resize"
+    )
+
+
+def test_main_window_pdf_panel_does_not_auto_widen(qtbot):
+    """PDF panel must not absorb extra width when the main window is resized."""
+    from pdf2xlsx.gui.main_window import MainWindow
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.show()
+    win.resize(1200, 800)
+    qtbot.wait(100)
+    pdf_w = win.splitter.sizes()[0]
+    win.resize(1800, 800)
+    qtbot.wait(100)
+    assert win.splitter.sizes()[0] == pdf_w, (
+        f"PDF panel grew from {pdf_w}px to {win.splitter.sizes()[0]}px on resize"
+    )
+
+
 def test_pdf_panel_thumb_strip_resizable(qtbot):
     """The thumbnail strip must live inside a QSplitter so the user can resize it."""
     from pdf2xlsx.gui.pdf_panel import PdfPanel
