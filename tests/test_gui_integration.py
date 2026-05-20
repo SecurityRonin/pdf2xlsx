@@ -38,7 +38,7 @@ def test_convert_populates_xlsx_panel(qtbot, term_sheet_path):
     win._pdf_path = term_sheet_path
     win._start_conversion()
     _wait_for_conversion(qtbot, win)
-    assert win.xlsx_panel.tab_widget.count() > 0
+    assert win.xlsx_panel.combo.count() > 0
 
 
 def test_convert_enables_save(qtbot, term_sheet_path):

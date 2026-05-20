@@ -106,7 +106,7 @@ def test_xlsx_panel_loads_tables(qtbot):
         ExtractedTable(page=2, index=0, rows=[["X", "Y"], ["3", "4"]], source="pdfplumber"),
     ]
     panel.load_tables(tables)
-    assert panel.tab_widget.count() == 2
+    assert panel.combo.count() == 2
 
 
 def test_xlsx_panel_clear(qtbot):
@@ -118,7 +118,7 @@ def test_xlsx_panel_clear(qtbot):
         ExtractedTable(page=1, index=0, rows=[["A"]], source="pdfplumber")
     ])
     panel.clear()
-    assert panel.tab_widget.count() == 0
+    assert panel.combo.count() == 0
 
 
 def test_xlsx_panel_cell_data(qtbot):
@@ -133,7 +133,7 @@ def test_xlsx_panel_cell_data(qtbot):
             source="pdfplumber",
         )
     ])
-    tbl = panel.tab_widget.widget(0)
+    tbl = panel.stack.widget(0)
     assert tbl.item(0, 0).text() == "Name"
     assert tbl.item(1, 1).text() == "100"
 
@@ -148,7 +148,7 @@ def test_xlsx_panel_columns_resizable(qtbot):
     panel.load_tables([
         ExtractedTable(page=1, index=0, rows=[["Name", "Value"], ["Alice", "100"]], source="pdfplumber")
     ])
-    tbl = panel.tab_widget.widget(0)
+    tbl = panel.stack.widget(0)
     assert not tbl.horizontalHeader().isHidden(), "Header must not be hidden (resize handles need it)"
     mode = tbl.horizontalHeader().sectionResizeMode(0)
     assert mode == QHeaderView.ResizeMode.Interactive, "Columns must be user-resizable"
@@ -164,7 +164,7 @@ def test_xlsx_panel_long_text_not_truncated(qtbot):
     panel.load_tables([
         ExtractedTable(page=1, index=0, rows=[["Label", "Description"], ["Row1", long_text]], source="pdfplumber")
     ])
-    tbl = panel.tab_widget.widget(0)
+    tbl = panel.stack.widget(0)
     col_width = tbl.columnWidth(1)
     # Either column is wide enough to show the text, or word-wrap is on
     assert col_width > 50 or tbl.wordWrap(), "Long text must not be silently clipped"
@@ -185,7 +185,7 @@ def test_xlsx_panel_unicode_cells(qtbot):
     panel.load_tables([
         ExtractedTable(page=1, index=0, rows=rows, source="pdfplumber")
     ])
-    tbl = panel.tab_widget.widget(0)
+    tbl = panel.stack.widget(0)
     assert tbl.item(1, 1).text() == "你好世界"
     assert tbl.item(1, 2).text() == "مرحبا"
     assert tbl.item(1, 3).text() == "✓ ✗ →"
@@ -271,7 +271,7 @@ def test_auto_convert_on_load(qtbot, tmp_path):
         # Wait for the background thread to finish
         qtbot.waitUntil(lambda: win.btn_save.isEnabled(), timeout=5000)
 
-    assert win.xlsx_panel.tab_widget.count() == 1
+    assert win.xlsx_panel.combo.count() == 1
 
 
 def test_conversion_runs_in_background(qtbot, tmp_path):
@@ -333,7 +333,7 @@ def test_table_does_not_expand_panel(qtbot):
     panel.load_tables([
         ExtractedTable(page=1, index=0, rows=[wide_row, wide_row], source="pdfplumber")
     ])
-    tbl = panel.tab_widget.widget(0)
+    tbl = panel.stack.widget(0)
     policy = tbl.sizeAdjustPolicy()
     assert policy == QAbstractScrollArea.SizeAdjustPolicy.AdjustIgnored, (
         "Table must not resize to fit contents — it must scroll instead"
@@ -363,7 +363,7 @@ def test_xlsx_panel_emits_table_selected_on_tab_change(qtbot):
     panel.load_tables(tables)
     received = []
     panel.table_selected.connect(received.append)
-    panel.tab_widget.setCurrentIndex(1)
+    panel.combo.setCurrentIndex(1)
     assert received == [7], f"Expected table_selected(7), got {received}"
 
 
@@ -404,7 +404,7 @@ def test_tab_click_advances_pdf_page(qtbot, tmp_path):
     with mock.patch("pdf2xlsx.extractor.extract_tables", return_value=tables):
         win._load_pdf(dst)
         qtbot.waitUntil(lambda: win.btn_save.isEnabled(), timeout=5000)
-    win.xlsx_panel.tab_widget.setCurrentIndex(1)  # tab for page 3
+    win.xlsx_panel.combo.setCurrentIndex(1)  # select entry for page 3
     assert win.pdf_panel.current_page == 2, (  # 0-based: page 3 → index 2
         f"PDF should be on page 3 (index 2), got {win.pdf_panel.current_page}"
     )
@@ -427,8 +427,8 @@ def test_pdf_page_change_selects_matching_tab(qtbot, tmp_path):
         win._load_pdf(dst)
         qtbot.waitUntil(lambda: win.btn_save.isEnabled(), timeout=5000)
     qtbot.mouseClick(win.pdf_panel.btn_next, Qt.MouseButton.LeftButton)
-    assert win.xlsx_panel.tab_widget.currentIndex() == 1, (
-        "Navigating to page 2 must select the tab for page 2's table"
+    assert win.xlsx_panel.combo.currentIndex() == 1, (
+        "Navigating to page 2 must select the combo entry for page 2's table"
     )
 
 
@@ -595,9 +595,9 @@ def test_xlsx_panel_add_table_appends_tab(qtbot):
     t1 = ExtractedTable(page=1, index=0, rows=[["H", "V"], ["a", "1"]], source="pdfplumber")
     t2 = ExtractedTable(page=2, index=0, rows=[["X", "Y"], ["b", "2"]], source="pdfplumber")
     panel.add_table(t1)
-    assert panel.tab_widget.count() == 1
+    assert panel.combo.count() == 1
     panel.add_table(t2)
-    assert panel.tab_widget.count() == 2
+    assert panel.combo.count() == 2
 
 
 def test_worker_emits_table_found_per_table(qtbot, tmp_path):
@@ -639,29 +639,140 @@ def test_worker_emits_table_found_per_table(qtbot, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Right panel: no resize on tab addition
+# Right panel: QComboBox replaces QTabWidget
 # ---------------------------------------------------------------------------
 
-def test_tab_widget_uses_scroll_buttons(qtbot):
-    """When there are many tabs, they must scroll rather than expanding the bar."""
+def test_xlsx_panel_has_combo(qtbot):
+    """XlsxPanel must expose a QComboBox as the table selector."""
     from pdf2xlsx.gui.xlsx_panel import XlsxPanel
-    from pdf2xlsx.models import ExtractedTable
+    from PySide6.QtWidgets import QComboBox
     panel = XlsxPanel()
     qtbot.addWidget(panel)
-    assert panel.tab_widget.usesScrollButtons(), (
-        "QTabWidget must use scroll buttons so tab bar doesn't expand indefinitely"
+    assert isinstance(getattr(panel, "combo", None), QComboBox), (
+        "XlsxPanel must have a .combo QComboBox attribute"
     )
 
 
-def test_tab_widget_size_policy_ignored(qtbot):
-    """QTabWidget must not push the splitter when tabs are added."""
+def test_xlsx_panel_combo_full_width(qtbot):
+    """Combo box must expand to fill the full pane width."""
     from pdf2xlsx.gui.xlsx_panel import XlsxPanel
     from PySide6.QtWidgets import QSizePolicy
     panel = XlsxPanel()
     qtbot.addWidget(panel)
-    hp = panel.tab_widget.sizePolicy().horizontalPolicy()
-    assert hp == QSizePolicy.Policy.Ignored, (
-        "QTabWidget horizontal size policy must be Ignored so splitter sizes are stable"
+    hp = panel.combo.sizePolicy().horizontalPolicy()
+    assert hp == QSizePolicy.Policy.Expanding, (
+        "Combo box horizontal policy must be Expanding so it fills the pane width"
+    )
+
+
+def test_xlsx_panel_combo_shows_page_and_caption(qtbot):
+    """Each combo entry must contain the page number and a table caption."""
+    from pdf2xlsx.gui.xlsx_panel import XlsxPanel
+    from pdf2xlsx.models import ExtractedTable
+    panel = XlsxPanel()
+    qtbot.addWidget(panel)
+    table = ExtractedTable(page=5, index=0, rows=[["H"], ["v"]], source="pdfplumber")
+    panel.add_table(table)
+    item_text = panel.combo.itemText(0)
+    assert "5" in item_text, f"Combo item must contain page number 5, got: {item_text!r}"
+
+
+def test_xlsx_panel_combo_selection_changes_stack(qtbot):
+    """Selecting a different combo item must switch the visible stack widget."""
+    from pdf2xlsx.gui.xlsx_panel import XlsxPanel
+    from pdf2xlsx.models import ExtractedTable
+    panel = XlsxPanel()
+    qtbot.addWidget(panel)
+    t1 = ExtractedTable(page=1, index=0, rows=[["A"]], source="pdfplumber")
+    t2 = ExtractedTable(page=2, index=0, rows=[["B"]], source="pdfplumber")
+    panel.add_table(t1)
+    panel.add_table(t2)
+    panel.combo.setCurrentIndex(1)
+    assert panel.stack.currentIndex() == 1, (
+        "stack.currentIndex must follow combo.currentIndex"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Zoom controls
+# ---------------------------------------------------------------------------
+
+def test_pdf_panel_has_zoom_in_button(qtbot):
+    """PdfPanel must have a btn_zoom_in button."""
+    from pdf2xlsx.gui.pdf_panel import PdfPanel
+    from PySide6.QtWidgets import QPushButton
+    panel = PdfPanel()
+    qtbot.addWidget(panel)
+    assert isinstance(getattr(panel, "btn_zoom_in", None), QPushButton), (
+        "PdfPanel must have a .btn_zoom_in QPushButton"
+    )
+
+
+def test_pdf_panel_has_zoom_out_button(qtbot):
+    """PdfPanel must have a btn_zoom_out button."""
+    from pdf2xlsx.gui.pdf_panel import PdfPanel
+    from PySide6.QtWidgets import QPushButton
+    panel = PdfPanel()
+    qtbot.addWidget(panel)
+    assert isinstance(getattr(panel, "btn_zoom_out", None), QPushButton), (
+        "PdfPanel must have a .btn_zoom_out QPushButton"
+    )
+
+
+def test_pdf_panel_zoom_in_increases_zoom(qtbot, tmp_path):
+    """Clicking btn_zoom_in must increase the zoom level."""
+    from pdf2xlsx.gui.pdf_panel import PdfPanel
+    dst = str(tmp_path / "zoom.pdf")
+    shutil.copy(FIXTURES / "annual_report.pdf", dst)
+    panel = PdfPanel()
+    qtbot.addWidget(panel)
+    panel.load_pdf(dst)
+    zoom_before = panel._zoom
+    qtbot.mouseClick(panel.btn_zoom_in, Qt.MouseButton.LeftButton)
+    assert panel._zoom > zoom_before, (
+        f"_zoom must increase after zoom_in; before={zoom_before}, after={panel._zoom}"
+    )
+
+
+def test_pdf_panel_zoom_out_decreases_zoom(qtbot, tmp_path):
+    """Clicking btn_zoom_out must decrease the zoom level."""
+    from pdf2xlsx.gui.pdf_panel import PdfPanel
+    dst = str(tmp_path / "zoom2.pdf")
+    shutil.copy(FIXTURES / "annual_report.pdf", dst)
+    panel = PdfPanel()
+    qtbot.addWidget(panel)
+    panel.load_pdf(dst)
+    zoom_before = panel._zoom
+    qtbot.mouseClick(panel.btn_zoom_out, Qt.MouseButton.LeftButton)
+    assert panel._zoom < zoom_before, (
+        f"_zoom must decrease after zoom_out; before={zoom_before}, after={panel._zoom}"
+    )
+
+
+def test_pdf_panel_zoom_has_label(qtbot):
+    """PdfPanel must show a zoom label (e.g. '150%') in the nav bar."""
+    from pdf2xlsx.gui.pdf_panel import PdfPanel
+    from PySide6.QtWidgets import QLabel
+    panel = PdfPanel()
+    qtbot.addWidget(panel)
+    assert isinstance(getattr(panel, "lbl_zoom", None), QLabel), (
+        "PdfPanel must have a .lbl_zoom QLabel showing the current zoom level"
+    )
+
+
+def test_pdf_panel_zoom_label_reflects_zoom(qtbot, tmp_path):
+    """lbl_zoom text must update to reflect the current zoom after zoom_in."""
+    from pdf2xlsx.gui.pdf_panel import PdfPanel
+    dst = str(tmp_path / "zoom3.pdf")
+    shutil.copy(FIXTURES / "annual_report.pdf", dst)
+    panel = PdfPanel()
+    qtbot.addWidget(panel)
+    panel.load_pdf(dst)
+    text_before = panel.lbl_zoom.text()
+    qtbot.mouseClick(panel.btn_zoom_in, Qt.MouseButton.LeftButton)
+    text_after = panel.lbl_zoom.text()
+    assert text_before != text_after, (
+        f"lbl_zoom must update when zoom changes; before={text_before!r}, after={text_after!r}"
     )
 
 
