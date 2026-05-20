@@ -8,9 +8,9 @@ from PySide6.QtGui import QPixmap, QImage, QIcon
 from PySide6.QtCore import Qt, Signal, QSize, QTimer
 
 
-_THUMB_ZOOM = 0.18   # small enough to render fast; gives ~110×140 px for letter
-_THUMB_W = 110
-_THUMB_H = 142
+_THUMB_ZOOM = 0.22   # renders ~135×174 px for letter — comfortably shows 3-digit labels
+_THUMB_W = 135
+_THUMB_H = 174
 
 
 class PdfPanel(QWidget):
@@ -94,6 +94,8 @@ class PdfPanel(QWidget):
         splitter.setSizes([_THUMB_W + 16, 800])
         splitter.setCollapsible(0, False)
         splitter.setCollapsible(1, False)
+        splitter.setStretchFactor(0, 0)   # thumb strip: fixed width on resize
+        splitter.setStretchFactor(1, 1)   # page view: absorbs extra space
 
     # ------------------------------------------------------------------
     # Drag-and-drop

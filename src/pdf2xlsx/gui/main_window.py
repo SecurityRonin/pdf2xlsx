@@ -66,6 +66,8 @@ class MainWindow(QMainWindow):
         self.splitter.addWidget(self.pdf_panel)
         self.splitter.addWidget(self.xlsx_panel)
         self.splitter.setSizes([640, 640])
+        self.splitter.setStretchFactor(0, 0)   # PDF panel: fixed width on resize
+        self.splitter.setStretchFactor(1, 1)   # XLSX panel: absorbs extra space
         self.setCentralWidget(self.splitter)
         self._syncing = False
         self.pdf_panel.pdf_dropped.connect(self._load_pdf)
