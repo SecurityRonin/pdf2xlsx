@@ -29,6 +29,8 @@ class XlsxPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.tab_widget = QTabWidget()
+        self.tab_widget.setUsesScrollButtons(True)
+        self.tab_widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(self.tab_widget)
 
@@ -38,6 +40,12 @@ class XlsxPanel(QWidget):
         for t in tables:
             tbl = self._make_table(t.rows)
             self.tab_widget.addTab(tbl, t.sheet_name)
+
+    def add_table(self, table):
+        """Append a single table as a new tab (used for progressive display)."""
+        self._tables.append(table)
+        tbl = self._make_table(table.rows)
+        self.tab_widget.addTab(tbl, table.sheet_name)
 
     def clear(self):
         self._tables = []

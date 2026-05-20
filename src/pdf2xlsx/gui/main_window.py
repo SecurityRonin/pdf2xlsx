@@ -10,6 +10,7 @@ from pdf2xlsx.gui.xlsx_panel import XlsxPanel
 
 
 class _ConversionWorker(QObject):
+    table_found = Signal(object)   # emitted per table as extraction progresses
     finished = Signal(list)
     error = Signal(str)
 
@@ -20,7 +21,7 @@ class _ConversionWorker(QObject):
     def run(self):
         from pdf2xlsx.extractor import extract_tables
         try:
-            tables = extract_tables(Path(self._path))
+            tables = extract_tables(Path(self._path), on_table=self.table_found.emit)
             self.finished.emit(tables)
         except Exception as exc:
             self.error.emit(str(exc))
@@ -116,6 +117,7 @@ class MainWindow(QMainWindow):
         self._thread = QThread()
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
+        self._worker.table_found.connect(self.xlsx_panel.add_table)
         self._worker.finished.connect(self._on_conversion_done)
         self._worker.error.connect(self._on_conversion_error)
         self._worker.finished.connect(self._thread.quit)
@@ -124,7 +126,10 @@ class MainWindow(QMainWindow):
 
     def _on_conversion_done(self, tables):
         self._tables = tables
-        self.xlsx_panel.load_tables(tables)
+        # Progressive display adds tabs via table_found; fall back to load_tables
+        # if on_table was never called (e.g. in tests that mock extract_tables).
+        if self.xlsx_panel.tab_widget.count() == 0 and tables:
+            self.xlsx_panel.load_tables(tables)
         self.btn_convert.setEnabled(True)
         self.btn_save.setEnabled(True)
         self.progress_bar.setVisible(False)

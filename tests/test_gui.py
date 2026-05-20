@@ -75,7 +75,7 @@ def test_pdf_panel_loads_pdf(qtbot, tmp_path):
     panel = PdfPanel()
     qtbot.addWidget(panel)
     panel.load_pdf(dst)
-    assert panel.lbl_page.text().startswith("Page 1")
+    assert panel.spin_page.value() == 1
 
 
 def test_pdf_panel_prev_next_buttons(qtbot, tmp_path):
@@ -558,7 +558,6 @@ def test_worker_emits_table_found_per_table(qtbot, tmp_path):
 
     found = []
     all_tables = [fake1, fake2]
-    call_count = [0]
 
     def fake_extract(path, on_table=None):
         for t in all_tables:
@@ -575,7 +574,12 @@ def test_worker_emits_table_found_per_table(qtbot, tmp_path):
         worker.finished.connect(thread_obj.quit)
         worker.error.connect(thread_obj.quit)
         thread_obj.start()
-        qtbot.waitSignal(thread_obj.finished, timeout=5000)
+        # Poll thread state — avoids race where finished signal fires before
+        # waitSignal() registers its listener, causing an indefinite hang.
+        qtbot.waitUntil(lambda: not thread_obj.isRunning(), timeout=5000)
+        thread_obj.wait()
+        # Flush any queued cross-thread signals so found.append is called
+        qtbot.waitUntil(lambda: len(found) == 2, timeout=2000)
 
     assert len(found) == 2, f"Expected 2 table_found emissions, got {len(found)}"
 

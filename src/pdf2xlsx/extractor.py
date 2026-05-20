@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Callable
 import pdfplumber
 import fitz  # pymupdf
 from pdf2xlsx.models import ExtractedTable
@@ -92,7 +93,10 @@ def _deduplicate(
     return result
 
 
-def extract_tables(path: Path) -> list[ExtractedTable]:
+def extract_tables(
+    path: Path,
+    on_table: Callable[[ExtractedTable], None] | None = None,
+) -> list[ExtractedTable]:
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"PDF not found: {path}")
@@ -100,4 +104,8 @@ def extract_tables(path: Path) -> list[ExtractedTable]:
     primary = _extract_pdfplumber(path)
     secondary = _extract_pymupdf(path)
     merged = _deduplicate(primary, secondary)
-    return [t for t in merged if not t.is_empty]
+    result = [t for t in merged if not t.is_empty]
+    if on_table:
+        for t in result:
+            on_table(t)
+    return result
