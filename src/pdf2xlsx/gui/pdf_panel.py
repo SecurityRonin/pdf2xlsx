@@ -25,7 +25,7 @@ class PdfPanel(QWidget):
         super().__init__(parent)
         self._doc = None
         self.current_page = 0
-        self._zoom = 1.5
+        self._zoom = 1.0
         self._block_thumb_signal = False
         self._thumb_render_idx = 0
         self._thumb_timer = None
@@ -66,6 +66,7 @@ class PdfPanel(QWidget):
         self.thumb_list.setIconSize(QSize(_THUMB_W, _THUMB_H))
         self.thumb_list.setSpacing(4)
         self.thumb_list.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.thumb_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.thumb_list.currentRowChanged.connect(self._on_thumb_row_changed)
         splitter.addWidget(self.thumb_list)
 
@@ -126,7 +127,8 @@ class PdfPanel(QWidget):
         right.addWidget(self.scroll, 1)
 
         splitter.addWidget(right_widget)
-        splitter.setSizes([_THUMB_W + 24, 800])   # slightly wider than thumbnail
+        # _THUMB_W + item padding (8) + vertical scrollbar (~18) + border (4) = no horizontal scroll
+        splitter.setSizes([_THUMB_W + 32, 800])
         splitter.setCollapsible(0, False)
         splitter.setCollapsible(1, False)
         splitter.setStretchFactor(0, 0)   # thumb strip: fixed width on resize
