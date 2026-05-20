@@ -31,6 +31,47 @@ def _is_meaningful_table(rows: list[list[str]]) -> bool:
     return True
 
 
+def _two_pass_expand(page, finders) -> list[list] | None:
+    """
+    Re-extract using the bordered tables' column x-positions as explicit vertical
+    guides, expanding the search region ±80pt to recover surrounding unbordered rows.
+
+    Returns raw rows if the result has more rows than the bordered tables alone,
+    otherwise None (fall back to line-based output).
+    """
+    try:
+        # Derive column boundary x-positions from all detected cell bboxes
+        xs: set[float] = set()
+        for tf in finders:
+            for (x0, _y0, x1, _y1) in tf.cells:
+                xs.add(round(x0, 1))
+                xs.add(round(x1, 1))
+        v_lines = sorted(xs)
+        if len(v_lines) < 2:
+            return None
+
+        min_x = min(tf.bbox[0] for tf in finders)
+        max_x = max(tf.bbox[2] for tf in finders)
+        min_y = max(0, min(tf.bbox[1] for tf in finders) - 80)
+        max_y = min(page.height, max(tf.bbox[3] for tf in finders) + 80)
+
+        cropped = page.crop((min_x, min_y, max_x, max_y))
+        extended = cropped.extract_table(table_settings={
+            "vertical_strategy": "explicit",
+            "horizontal_strategy": "text",
+            "explicit_vertical_lines": v_lines,
+            "text_y_tolerance": 5,
+            "snap_x_tolerance": 5,
+        })
+
+        bordered_total = sum(len(tf.extract()) for tf in finders)
+        if extended and len(extended) > bordered_total:
+            return extended
+    except Exception:
+        pass
+    return None
+
+
 def _extract_pdfplumber(path: Path) -> list[ExtractedTable]:
     tables: list[ExtractedTable] = []
     with pdfplumber.open(path) as pdf:
@@ -38,9 +79,19 @@ def _extract_pdfplumber(path: Path) -> list[ExtractedTable]:
             # text_x_tolerance=2 detects word spaces as narrow as 2 pts.
             # Some PDFs (e.g. TimesNewRoman at small sizes) encode word gaps
             # of ~2.7 pts which pdfplumber's default of 3 pts misses entirely.
-            page_tables = page.extract_tables(
-                table_settings={"text_x_tolerance": 2}
-            ) or []
+            settings = {"text_x_tolerance": 2}
+            finders = page.find_tables(table_settings=settings)
+
+            if finders:
+                # Try two-pass: use bordered column structure to recover unbordered rows
+                extended = _two_pass_expand(page, finders)
+                if extended:
+                    page_tables = [extended]
+                else:
+                    page_tables = [tf.extract() for tf in finders]
+            else:
+                page_tables = []
+
             idx = 0
             for raw_table in page_tables:
                 if not raw_table:
