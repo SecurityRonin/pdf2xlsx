@@ -6,3 +6,11 @@ __pycache__/
 dist/
 tests/fixtures/*.pdf
 download_fixtures.py
+bug.png
+.DS_Store
+build/
+visual_debug/
+compare_engines.py
+visual_check.py
+visual_debug.py
+smoke_test.py
