@@ -319,6 +319,120 @@ def test_drag_drop_triggers_conversion(qtbot, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Table stays within panel / scroll rather than expand
+# ---------------------------------------------------------------------------
+
+def test_table_does_not_expand_panel(qtbot):
+    """A wide table must not push the right panel beyond its allocated width."""
+    from pdf2xlsx.gui.xlsx_panel import XlsxPanel
+    from pdf2xlsx.models import ExtractedTable
+    from PySide6.QtWidgets import QAbstractScrollArea
+    panel = XlsxPanel()
+    qtbot.addWidget(panel)
+    wide_row = [f"Column {i} with some text" for i in range(20)]
+    panel.load_tables([
+        ExtractedTable(page=1, index=0, rows=[wide_row, wide_row], source="pdfplumber")
+    ])
+    tbl = panel.tab_widget.widget(0)
+    policy = tbl.sizeAdjustPolicy()
+    assert policy == QAbstractScrollArea.SizeAdjustPolicy.AdjustIgnored, (
+        "Table must not resize to fit contents — it must scroll instead"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tab ↔ PDF page sync
+# ---------------------------------------------------------------------------
+
+def test_xlsx_panel_has_table_selected_signal(qtbot):
+    from pdf2xlsx.gui.xlsx_panel import XlsxPanel
+    panel = XlsxPanel()
+    qtbot.addWidget(panel)
+    assert hasattr(panel, "table_selected"), "XlsxPanel must have a table_selected(page) signal"
+
+
+def test_xlsx_panel_emits_table_selected_on_tab_change(qtbot):
+    from pdf2xlsx.gui.xlsx_panel import XlsxPanel
+    from pdf2xlsx.models import ExtractedTable
+    panel = XlsxPanel()
+    qtbot.addWidget(panel)
+    tables = [
+        ExtractedTable(page=3, index=0, rows=[["A"]], source="pdfplumber"),
+        ExtractedTable(page=7, index=0, rows=[["B"]], source="pdfplumber"),
+    ]
+    panel.load_tables(tables)
+    received = []
+    panel.table_selected.connect(received.append)
+    panel.tab_widget.setCurrentIndex(1)
+    assert received == [7], f"Expected table_selected(7), got {received}"
+
+
+def test_pdf_panel_has_page_changed_signal(qtbot):
+    from pdf2xlsx.gui.pdf_panel import PdfPanel
+    panel = PdfPanel()
+    qtbot.addWidget(panel)
+    assert hasattr(panel, "page_changed"), "PdfPanel must have a page_changed(page_1based) signal"
+
+
+def test_pdf_panel_emits_page_changed_on_navigate(qtbot, tmp_path):
+    from pdf2xlsx.gui.pdf_panel import PdfPanel
+    dst = str(tmp_path / "nav.pdf")
+    shutil.copy(FIXTURES / "annual_report.pdf", dst)
+    panel = PdfPanel()
+    qtbot.addWidget(panel)
+    received = []
+    panel.page_changed.connect(received.append)
+    panel.load_pdf(dst)
+    qtbot.mouseClick(panel.btn_next, Qt.MouseButton.LeftButton)
+    # load emits page 1, next emits page 2
+    assert 1 in received and 2 in received, f"Expected pages 1 and 2, got {received}"
+
+
+def test_tab_click_advances_pdf_page(qtbot, tmp_path):
+    """Selecting tab for page 3 must move the PDF viewer to page 3."""
+    from pdf2xlsx.gui.main_window import MainWindow
+    from pdf2xlsx.models import ExtractedTable
+    dst = str(tmp_path / "sync.pdf")
+    shutil.copy(FIXTURES / "annual_report.pdf", dst)
+    win = MainWindow()
+    qtbot.addWidget(win)
+    import unittest.mock as mock
+    tables = [
+        ExtractedTable(page=1, index=0, rows=[["A"]], source="pdfplumber"),
+        ExtractedTable(page=3, index=0, rows=[["B"]], source="pdfplumber"),
+    ]
+    with mock.patch("pdf2xlsx.extractor.extract_tables", return_value=tables):
+        win._load_pdf(dst)
+        qtbot.waitUntil(lambda: win.btn_save.isEnabled(), timeout=5000)
+    win.xlsx_panel.tab_widget.setCurrentIndex(1)  # tab for page 3
+    assert win.pdf_panel.current_page == 2, (  # 0-based: page 3 → index 2
+        f"PDF should be on page 3 (index 2), got {win.pdf_panel.current_page}"
+    )
+
+
+def test_pdf_page_change_selects_matching_tab(qtbot, tmp_path):
+    """Navigating PDF to a page that has an extracted table must select that tab."""
+    from pdf2xlsx.gui.main_window import MainWindow
+    from pdf2xlsx.models import ExtractedTable
+    dst = str(tmp_path / "sync2.pdf")
+    shutil.copy(FIXTURES / "annual_report.pdf", dst)
+    win = MainWindow()
+    qtbot.addWidget(win)
+    import unittest.mock as mock
+    tables = [
+        ExtractedTable(page=1, index=0, rows=[["A"]], source="pdfplumber"),
+        ExtractedTable(page=2, index=0, rows=[["B"]], source="pdfplumber"),
+    ]
+    with mock.patch("pdf2xlsx.extractor.extract_tables", return_value=tables):
+        win._load_pdf(dst)
+        qtbot.waitUntil(lambda: win.btn_save.isEnabled(), timeout=5000)
+    qtbot.mouseClick(win.pdf_panel.btn_next, Qt.MouseButton.LeftButton)
+    assert win.xlsx_panel.tab_widget.currentIndex() == 1, (
+        "Navigating to page 2 must select the tab for page 2's table"
+    )
+
+
+# ---------------------------------------------------------------------------
 # App module
 # ---------------------------------------------------------------------------
 
