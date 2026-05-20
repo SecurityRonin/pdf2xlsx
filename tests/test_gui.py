@@ -1,8 +1,10 @@
 """GUI unit tests — run headless with pytest-qt."""
 import pytest
 import shutil
+import unittest.mock as mock
 from pathlib import Path
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QMimeData, QUrl
+from PySide6.QtGui import QDropEvent, QDragEnterEvent
 
 FIXTURES = Path("tests/fixtures")
 
@@ -187,6 +189,133 @@ def test_xlsx_panel_unicode_cells(qtbot):
     assert tbl.item(1, 1).text() == "你好世界"
     assert tbl.item(1, 2).text() == "مرحبا"
     assert tbl.item(1, 3).text() == "✓ ✗ →"
+
+
+# ---------------------------------------------------------------------------
+# Drag-and-drop
+# ---------------------------------------------------------------------------
+
+def test_pdf_panel_accepts_drops(qtbot):
+    from pdf2xlsx.gui.pdf_panel import PdfPanel
+    panel = PdfPanel()
+    qtbot.addWidget(panel)
+    assert panel.acceptDrops(), "PdfPanel must accept file drops"
+
+
+def test_pdf_panel_has_pdf_dropped_signal(qtbot):
+    from pdf2xlsx.gui.pdf_panel import PdfPanel
+    panel = PdfPanel()
+    qtbot.addWidget(panel)
+    assert hasattr(panel, "pdf_dropped"), "PdfPanel must have a pdf_dropped signal"
+
+
+def test_pdf_panel_emits_pdf_dropped_on_drop(qtbot, tmp_path):
+    """Dropping a PDF file onto PdfPanel must emit pdf_dropped with the path."""
+    from pdf2xlsx.gui.pdf_panel import PdfPanel
+    dst = str(tmp_path / "drop.pdf")
+    shutil.copy(FIXTURES / "term_sheet.pdf", dst)
+    panel = PdfPanel()
+    qtbot.addWidget(panel)
+
+    received = []
+    panel.pdf_dropped.connect(received.append)
+
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(dst)])
+    # Simulate drop at centre of widget
+    pos = panel.rect().center()
+    drop_event = QDropEvent(
+        pos,
+        Qt.DropAction.CopyAction,
+        mime,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    panel.dropEvent(drop_event)
+
+    assert received == [dst], f"Expected pdf_dropped('{dst}'), got {received}"
+
+
+# ---------------------------------------------------------------------------
+# Auto-convert + non-blocking progress
+# ---------------------------------------------------------------------------
+
+def test_main_window_has_progress_bar(qtbot):
+    from pdf2xlsx.gui.main_window import MainWindow
+    from PySide6.QtWidgets import QProgressBar
+    win = MainWindow()
+    qtbot.addWidget(win)
+    assert hasattr(win, "progress_bar"), "MainWindow must have a progress_bar"
+    assert isinstance(win.progress_bar, QProgressBar)
+
+
+def test_progress_bar_hidden_initially(qtbot):
+    from pdf2xlsx.gui.main_window import MainWindow
+    win = MainWindow()
+    qtbot.addWidget(win)
+    assert not win.progress_bar.isVisible(), "Progress bar must be hidden before any PDF is loaded"
+
+
+def test_auto_convert_on_load(qtbot, tmp_path):
+    """Loading a PDF must trigger conversion without a manual Convert click."""
+    from pdf2xlsx.gui.main_window import MainWindow
+    from pdf2xlsx.models import ExtractedTable
+    dst = str(tmp_path / "auto.pdf")
+    shutil.copy(FIXTURES / "term_sheet.pdf", dst)
+    win = MainWindow()
+    qtbot.addWidget(win)
+
+    fake = [ExtractedTable(page=1, index=0, rows=[["A", "B"], ["1", "2"]], source="pdfplumber")]
+    with mock.patch("pdf2xlsx.extractor.extract_tables", return_value=fake):
+        win._load_pdf(dst)
+        # Wait for the background thread to finish
+        qtbot.waitUntil(lambda: win.btn_save.isEnabled(), timeout=5000)
+
+    assert win.xlsx_panel.tab_widget.count() == 1
+
+
+def test_conversion_runs_in_background(qtbot, tmp_path):
+    """_start_conversion must not block: the thread is alive immediately after the call."""
+    from pdf2xlsx.gui.main_window import MainWindow
+    dst = str(tmp_path / "bg.pdf")
+    shutil.copy(FIXTURES / "term_sheet.pdf", dst)
+    win = MainWindow()
+    qtbot.addWidget(win)
+
+    import threading
+    barrier = threading.Event()
+
+    def slow_extract(_path):
+        barrier.wait(timeout=3)
+        from pdf2xlsx.models import ExtractedTable
+        return [ExtractedTable(page=1, index=0, rows=[["X"]], source="pdfplumber")]
+
+    with mock.patch("pdf2xlsx.extractor.extract_tables", side_effect=slow_extract):
+        win._load_pdf(dst)
+        # Thread must be running while the "slow" extract holds on barrier
+        assert win._thread is not None and win._thread.isRunning(), (
+            "Conversion must run in a background thread (non-blocking)"
+        )
+        barrier.set()  # unblock the worker
+        qtbot.waitUntil(lambda: not win._thread.isRunning(), timeout=5000)
+
+
+def test_drag_drop_triggers_conversion(qtbot, tmp_path):
+    """Dropping a PDF on the left panel must auto-convert (Save button enabled after)."""
+    from pdf2xlsx.gui.main_window import MainWindow
+    from pdf2xlsx.models import ExtractedTable
+    dst = str(tmp_path / "drop_conv.pdf")
+    shutil.copy(FIXTURES / "term_sheet.pdf", dst)
+    win = MainWindow()
+    qtbot.addWidget(win)
+
+    fake = [ExtractedTable(page=1, index=0, rows=[["H"], ["v"]], source="pdfplumber")]
+    with mock.patch("pdf2xlsx.extractor.extract_tables", return_value=fake):
+        # Simulate the signal that the drop event fires
+        win.pdf_panel.pdf_dropped.emit(dst)
+        qtbot.waitUntil(lambda: win.btn_save.isEnabled(), timeout=5000)
+
+    assert win._pdf_path == dst
 
 
 # ---------------------------------------------------------------------------
