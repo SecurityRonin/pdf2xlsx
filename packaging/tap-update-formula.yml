@@ -1,0 +1,44 @@
+# This file lives in the h4x0r/homebrew-pdf2xlsx tap repo as:
+# .github/workflows/update-formula.yml
+#
+# It receives the repository-dispatch event from the main release workflow
+# and rewrites Formula/pdf2xlsx.rb with the real version + SHA256 hashes.
+
+name: Update formula
+
+on:
+  repository_dispatch:
+    types: [new-release]
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rewrite formula
+        env:
+          VERSION: ${{ github.event.client_payload.version }}
+          ARM64_MAC: ${{ github.event.client_payload.arm64_mac_sha }}
+          X86_64_MAC: ${{ github.event.client_payload.x86_64_mac_sha }}
+          X86_64_LINUX: ${{ github.event.client_payload.x86_64_linux_sha }}
+          ARM64_LINUX: ${{ github.event.client_payload.arm64_linux_sha }}
+        run: |
+          VER="${VERSION#v}"   # strip leading 'v'
+          sed -i \
+            -e "s|version \".*\"|version \"${VER}\"|" \
+            -e "s|PLACEHOLDER_ARM64_MAC|${ARM64_MAC}|" \
+            -e "s|PLACEHOLDER_X86_64_MAC|${X86_64_MAC}|" \
+            -e "s|PLACEHOLDER_X86_64_LINUX|${X86_64_LINUX}|" \
+            -e "s|PLACEHOLDER_ARM64_LINUX|${ARM64_LINUX}|" \
+            Formula/pdf2xlsx.rb
+
+      - name: Commit and push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/pdf2xlsx.rb
+          git commit -m "chore: update pdf2xlsx to ${{ github.event.client_payload.version }}"
+          git push

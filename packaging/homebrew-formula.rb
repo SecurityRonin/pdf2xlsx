@@ -5,17 +5,22 @@ class Pdf2xlsx < Formula
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/h4x0r/pdf2xlsx/releases/download/v#{version}/pdf2xlsx-#{version}-aarch64-apple-darwin.tar.gz"
-      sha256 "PLACEHOLDER_ARM64"
+      url "https://github.com/h4x0r/pdf2xlsx/releases/download/v#{version}/pdf2xlsx-aarch64-apple-darwin.tar.gz"
+      sha256 "PLACEHOLDER_ARM64_MAC"
     else
-      url "https://github.com/h4x0r/pdf2xlsx/releases/download/v#{version}/pdf2xlsx-#{version}-x86_64-apple-darwin.tar.gz"
-      sha256 "PLACEHOLDER_X86_64"
+      url "https://github.com/h4x0r/pdf2xlsx/releases/download/v#{version}/pdf2xlsx-x86_64-apple-darwin.tar.gz"
+      sha256 "PLACEHOLDER_X86_64_MAC"
     end
   end
 
   on_linux do
-    url "https://github.com/h4x0r/pdf2xlsx/releases/download/v#{version}/pdf2xlsx-#{version}-x86_64-unknown-linux-musl.tar.gz"
-    sha256 "PLACEHOLDER_LINUX"
+    if Hardware::CPU.arm?
+      url "https://github.com/h4x0r/pdf2xlsx/releases/download/v#{version}/pdf2xlsx-aarch64-unknown-linux-musl.tar.gz"
+      sha256 "PLACEHOLDER_ARM64_LINUX"
+    else
+      url "https://github.com/h4x0r/pdf2xlsx/releases/download/v#{version}/pdf2xlsx-x86_64-unknown-linux-musl.tar.gz"
+      sha256 "PLACEHOLDER_X86_64_LINUX"
+    end
   end
 
   def install
