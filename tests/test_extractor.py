@@ -141,6 +141,24 @@ def test_merge_continuation_tables_different_col_count_not_merged():
     assert len(merged) == 2, "Tables with different column counts must not be merged"
 
 
+def test_borderless_rows_recovered_via_two_pass(term_sheet):
+    """
+    Pages where only some table sections have border lines must still recover
+    all data rows by using bordered table column positions as explicit guides.
+
+    term_sheet.pdf p.64 has 5 executives × 3 years = 15 data rows, but only
+    2 executives have PDF border lines.  After the two-pass fix we expect at
+    least 10 rows on that page (some name/header rows may still be split).
+    """
+    tables = extract_tables(term_sheet)
+    p64 = [t for t in tables if t.page == 64]
+    total_rows = sum(len(t.rows) for t in p64)
+    assert total_rows >= 10, (
+        f"Expected ≥10 rows on p.64, got {total_rows} across {len(p64)} table(s). "
+        "Borderless rows from executives without PDF border lines may be missing."
+    )
+
+
 def test_no_stuck_words_in_cells(general_ledger):
     """Cells must not concatenate words without spaces (pdfplumber x_tolerance bug)."""
     tables = extract_tables(general_ledger)

@@ -43,8 +43,11 @@ class PdfPanel(QWidget):
         # Left: thumbnail strip (resizable via splitter)
         self.thumb_list = QListWidget()
         self.thumb_list.setMinimumWidth(60)
+        self.thumb_list.setViewMode(QListWidget.ViewMode.IconMode)
+        self.thumb_list.setFlow(QListWidget.Flow.TopToBottom)
+        self.thumb_list.setWrapping(False)
         self.thumb_list.setIconSize(QSize(_THUMB_W, _THUMB_H))
-        self.thumb_list.setSpacing(2)
+        self.thumb_list.setSpacing(4)
         self.thumb_list.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.thumb_list.currentRowChanged.connect(self._on_thumb_row_changed)
         splitter.addWidget(self.thumb_list)
@@ -91,7 +94,7 @@ class PdfPanel(QWidget):
         right.addWidget(self.scroll, 1)
 
         splitter.addWidget(right_widget)
-        splitter.setSizes([_THUMB_W + 16, 800])
+        splitter.setSizes([_THUMB_W + 24, 800])   # slightly wider than thumbnail
         splitter.setCollapsible(0, False)
         splitter.setCollapsible(1, False)
         splitter.setStretchFactor(0, 0)   # thumb strip: fixed width on resize
@@ -134,7 +137,7 @@ class PdfPanel(QWidget):
         n = len(self._doc)
         for i in range(n):
             item = QListWidgetItem(str(i + 1))
-            item.setSizeHint(QSize(_THUMB_W + 4, _THUMB_H + 20))
+            item.setSizeHint(QSize(_THUMB_W + 8, _THUMB_H + 24))
             self.thumb_list.addItem(item)
         self.thumb_list.setCurrentRow(0)
         self._thumb_render_idx = 0
