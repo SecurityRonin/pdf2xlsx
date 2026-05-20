@@ -136,6 +136,59 @@ def test_xlsx_panel_cell_data(qtbot):
     assert tbl.item(1, 1).text() == "100"
 
 
+def test_xlsx_panel_columns_resizable(qtbot):
+    """Horizontal header must be visible so users can drag column widths."""
+    from pdf2xlsx.gui.xlsx_panel import XlsxPanel
+    from pdf2xlsx.models import ExtractedTable
+    from PySide6.QtWidgets import QHeaderView
+    panel = XlsxPanel()
+    qtbot.addWidget(panel)
+    panel.load_tables([
+        ExtractedTable(page=1, index=0, rows=[["Name", "Value"], ["Alice", "100"]], source="pdfplumber")
+    ])
+    tbl = panel.tab_widget.widget(0)
+    assert not tbl.horizontalHeader().isHidden(), "Header must not be hidden (resize handles need it)"
+    mode = tbl.horizontalHeader().sectionResizeMode(0)
+    assert mode == QHeaderView.ResizeMode.Interactive, "Columns must be user-resizable"
+
+
+def test_xlsx_panel_long_text_not_truncated(qtbot):
+    """Cells with long text must not be clipped — column wide enough or word-wrapped."""
+    from pdf2xlsx.gui.xlsx_panel import XlsxPanel
+    from pdf2xlsx.models import ExtractedTable
+    long_text = "This is a very long cell value that would normally be truncated by default column width settings"
+    panel = XlsxPanel()
+    qtbot.addWidget(panel)
+    panel.load_tables([
+        ExtractedTable(page=1, index=0, rows=[["Label", "Description"], ["Row1", long_text]], source="pdfplumber")
+    ])
+    tbl = panel.tab_widget.widget(0)
+    col_width = tbl.columnWidth(1)
+    # Either column is wide enough to show the text, or word-wrap is on
+    assert col_width > 50 or tbl.wordWrap(), "Long text must not be silently clipped"
+    # Item text must be complete — no ellipsis in the model
+    assert tbl.item(1, 1).text() == long_text
+
+
+def test_xlsx_panel_unicode_cells(qtbot):
+    """CJK, Arabic, and special characters must be stored and retrievable intact."""
+    from pdf2xlsx.gui.xlsx_panel import XlsxPanel
+    from pdf2xlsx.models import ExtractedTable
+    rows = [
+        ["English", "Chinese", "Arabic", "Symbol"],
+        ["Hello", "你好世界", "مرحبا", "✓ ✗ →"],
+    ]
+    panel = XlsxPanel()
+    qtbot.addWidget(panel)
+    panel.load_tables([
+        ExtractedTable(page=1, index=0, rows=rows, source="pdfplumber")
+    ])
+    tbl = panel.tab_widget.widget(0)
+    assert tbl.item(1, 1).text() == "你好世界"
+    assert tbl.item(1, 2).text() == "مرحبا"
+    assert tbl.item(1, 3).text() == "✓ ✗ →"
+
+
 # ---------------------------------------------------------------------------
 # App module
 # ---------------------------------------------------------------------------

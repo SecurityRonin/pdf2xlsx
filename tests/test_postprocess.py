@@ -235,3 +235,48 @@ def test_real_nutanix_p149_alignment():
     assert high_col is not None
     assert val_col is not None
     assert high_col == val_col, f"High at col {high_col}, $27.40 at col {val_col}"
+
+
+def test_paragraph_rows_dropped():
+    """
+    Long single-cell prose rows appended by pdfplumber below a multi-column
+    table must be removed — they are adjacent paragraphs, not table data.
+    """
+    rows = [
+        ["Option", "Zero Trust", "AD Forests"],
+        ["Cost",   "$300K",     "$150K"],
+        ["Risk",   "Low",       "High"],
+        # paragraph pdfplumber grabbed below the table:
+        ["These are not alternatives. Option A is Option B with an AD migration "
+         "added on top. A three-forest architecture without Zero Trust is not a "
+         "defensible state.", "", ""],
+    ]
+    result = postprocess_rows(rows)
+    for row in result:
+        non_empty = [c for c in row if c.strip()]
+        assert not (
+            len(non_empty) == 1 and len(non_empty[0].split()) > 12
+        ), f"Paragraph row survived postprocessing: {non_empty[0][:60]!r}"
+
+
+def test_short_single_cell_rows_kept():
+    """Single-cell rows with short content (section labels) must NOT be dropped."""
+    rows = [
+        ["Section A"],
+        ["Revenue",  "$1,000"],
+        ["Costs",    "$800"],
+    ]
+    result = postprocess_rows(rows)
+    assert any("Section A" in c for row in result for c in row), \
+        "Short single-cell label row was incorrectly dropped"
+
+
+def test_multisentence_header_kept():
+    """A two-sentence header row must be kept even if it has many words."""
+    rows = [
+        ["Fiscal Year Ended July 31, 2024. All amounts in thousands.", "2022", "2023"],
+        ["Subscription revenue", "$1,433,773", "$1,730,848"],
+    ]
+    result = postprocess_rows(rows)
+    assert result[0][0].startswith("Fiscal Year"), \
+        "Multi-word header in row 0 must never be dropped"
