@@ -195,3 +195,30 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: "*.deb"
+
+  # ── Push .deb to Cloudsmith APT repo ───────────────────────────────────────
+  cloudsmith:
+    name: Publish to Cloudsmith
+    needs: release-deb
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "pdf2xlsx-*.deb"
+          path: debs/
+          merge-multiple: true
+
+      - name: Install Cloudsmith CLI
+        run: |
+          pip install --user cloudsmith-cli==1.16.0
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Push amd64 to Cloudsmith
+        env:
+          CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
+        run: cloudsmith push deb securityronin/pdf2xlsx/any-distro/any-version debs/pdf2xlsx_*_amd64.deb
+
+      - name: Push arm64 to Cloudsmith
+        env:
+          CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
+        run: cloudsmith push deb securityronin/pdf2xlsx/any-distro/any-version debs/pdf2xlsx_*_arm64.deb
