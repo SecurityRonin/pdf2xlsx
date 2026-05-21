@@ -6,6 +6,7 @@ from unittest.mock import patch, MagicMock
 from pdf2xlsx.extractor import (
     extract_tables, _merge_continuation_tables, _select_best_per_page,
     _pages_with_drawn_lines, _IMG2TABLE_ZOOM, _score_tables, _ENGINE_TIMEOUT,
+    _clean_rows,
 )
 from pdf2xlsx.models import ExtractedTable
 
@@ -339,6 +340,29 @@ def test_select_best_per_page_hard_rejects_stuck_words_when_clean_available():
         f"Clean engine must win even when stuck engine has more cells; "
         f"got source={result[0].source!r}"
     )
+
+
+def test_clean_rows_splits_camelcase_stuck_words():
+    """_clean_rows must insert spaces at camelCase boundaries in stuck-word cells.
+
+    On some PDFs, text elements are stored without inter-word spacing; all
+    extractors then produce cells like 'IntellectualPropertyandIntangibleAssets'.
+    CamelCase splitting converts these to readable text and ensures they no
+    longer match the stuck-word predicate.
+    """
+    raw = [
+        ['Name', 'Amount'],
+        ['IntellectualPropertyandIntangibleAssets', '1,000'],
+        ['ualPropertyandIntangibleAssets', '2,000'],
+    ]
+    cleaned = _clean_rows(raw)
+    for row_idx, original in [(1, 'IntellectualPropertyandIntangibleAssets'),
+                               (2, 'ualPropertyandIntangibleAssets')]:
+        cell = cleaned[row_idx][0]
+        assert ' ' in cell, (
+            f"CamelCase stuck word '{original}' must have spaces after cleaning; "
+            f"got {cell!r}"
+        )
 
 
 def test_img2table_zoom_is_at_most_one():
