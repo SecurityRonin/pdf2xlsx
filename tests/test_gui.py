@@ -27,12 +27,68 @@ def test_main_window_has_open_button(qtbot):
     assert win.btn_open is not None
 
 
-def test_main_window_has_convert_button(qtbot):
+def test_main_window_no_convert_button(qtbot):
+    """Convert is automatic on load — no manual Convert button should exist."""
     from pdf2xlsx.gui.main_window import MainWindow
     win = MainWindow()
     qtbot.addWidget(win)
-    assert win.btn_convert is not None
-    assert not win.btn_convert.isEnabled()
+    assert not hasattr(win, "btn_convert"), (
+        "btn_convert must be removed; conversion triggers automatically on PDF load"
+    )
+
+
+def test_save_default_filename_uses_pdf_stem(qtbot, tmp_path):
+    """Save dialog must default to the loaded PDF's path with .pdf replaced by .xlsx."""
+    import shutil
+    from unittest.mock import patch
+    from pdf2xlsx.gui.main_window import MainWindow
+    from pdf2xlsx.models import ExtractedTable
+
+    dst = str(tmp_path / "my_report.pdf")
+    shutil.copy(FIXTURES / "term_sheet.pdf", dst)
+
+    fake_table = ExtractedTable(page=1, index=0, rows=[["H", "V"], ["a", "1"]], source="pdfplumber")
+
+    def fake_extract(path, on_table=None, on_progress=None):
+        return [fake_table]
+
+    win = MainWindow()
+    qtbot.addWidget(win)
+
+    captured = {}
+
+    def fake_save_dialog(parent, title, default_path, filt):
+        captured["default_path"] = default_path
+        return ("", "")
+
+    with patch("pdf2xlsx.extractor.extract_tables", side_effect=fake_extract), \
+         patch("pdf2xlsx.gui.main_window.QFileDialog.getSaveFileName", side_effect=fake_save_dialog):
+        win._load_pdf(dst)
+        qtbot.waitUntil(lambda: win.btn_save.isEnabled(), timeout=10000)
+        win._on_save()
+
+    expected = str(tmp_path / "my_report.xlsx")
+    assert captured.get("default_path") == expected, (
+        f"Save dialog default must be '{expected}', got {captured.get('default_path')!r}"
+    )
+
+
+def test_combo_sorted_ascending_on_add(qtbot):
+    """Entries added out of order must appear in ascending page order in the combo."""
+    from pdf2xlsx.gui.xlsx_panel import XlsxPanel
+    from pdf2xlsx.models import ExtractedTable
+    panel = XlsxPanel()
+    qtbot.addWidget(panel)
+    t3 = ExtractedTable(page=3, index=0, rows=[["H", "V"], ["c", "3"]], source="pdfplumber")
+    t1 = ExtractedTable(page=1, index=0, rows=[["H", "V"], ["a", "1"]], source="pdfplumber")
+    t2 = ExtractedTable(page=2, index=0, rows=[["H", "V"], ["b", "2"]], source="pdfplumber")
+    panel.add_table(t3)
+    panel.add_table(t1)
+    panel.add_table(t2)
+    pages = [panel._tables[i].page for i in range(panel.combo.count())]
+    assert pages == sorted(pages), (
+        f"Combo must be in ascending page order, got {pages}"
+    )
 
 
 def test_main_window_has_save_button(qtbot):

@@ -43,13 +43,12 @@ class XlsxPanel(QWidget):
         return f"p.{table.page} · {table.sheet_name}  [{table.source}]"
 
     def load_tables(self, tables):
-        self._tables = list(tables)
+        self._tables = sorted(tables, key=lambda t: (t.page, t.index))
         self.combo.blockSignals(True)
         self.combo.clear()
-        # Remove all stacked pages
         while self.stack.count():
             self.stack.removeWidget(self.stack.widget(0))
-        for t in tables:
+        for t in self._tables:
             tbl = self._make_table(t.rows)
             self.stack.addWidget(tbl)
             self.combo.addItem(self._combo_label(t))
@@ -59,10 +58,13 @@ class XlsxPanel(QWidget):
             self.stack.setCurrentIndex(0)
 
     def add_table(self, table):
-        """Add or replace a table entry.  If a table for this page already exists
-        and the new one has more data, replace it in-place (upsert semantics)."""
+        """Add or replace a table entry, maintaining ascending (page, index) order.
+
+        Same-page entries are upserted in-place; new pages are inserted at the
+        correct sorted position so the combo always reads page 1, 2, 3 …
+        """
         for i, existing in enumerate(self._tables):
-            if existing.page == table.page:
+            if existing.page == table.page and existing.index == table.index:
                 self._tables[i] = table
                 new_widget = self._make_table(table.rows)
                 old_widget = self.stack.widget(i)
@@ -73,11 +75,16 @@ class XlsxPanel(QWidget):
                 if self.combo.currentIndex() == i:
                     self.stack.setCurrentIndex(i)
                 return
-        # New page — append
-        self._tables.append(table)
+        # New entry — find sorted insertion position by (page, index)
+        key = (table.page, table.index)
+        pos = next(
+            (i for i, t in enumerate(self._tables) if (t.page, t.index) > key),
+            len(self._tables),
+        )
+        self._tables.insert(pos, table)
         tbl = self._make_table(table.rows)
-        self.stack.addWidget(tbl)
-        self.combo.addItem(self._combo_label(table))
+        self.stack.insertWidget(pos, tbl)
+        self.combo.insertItem(pos, self._combo_label(table))
 
     def clear(self):
         self._tables = []

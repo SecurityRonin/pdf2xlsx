@@ -54,12 +54,6 @@ class MainWindow(QMainWindow):
 
         tb.addSeparator()
 
-        self.btn_convert = tb.addAction("Convert")
-        self.btn_convert.setEnabled(False)
-        self.btn_convert.triggered.connect(self._start_conversion)
-
-        tb.addSeparator()
-
         self.btn_save = tb.addAction("Save XLSX")
         self.btn_save.setEnabled(False)
         self.btn_save.triggered.connect(self._on_save)
@@ -118,7 +112,6 @@ class MainWindow(QMainWindow):
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(True)
-        self.btn_convert.setEnabled(False)
         self.btn_save.setEnabled(False)
         self.statusBar().showMessage("Converting…")
 
@@ -144,14 +137,12 @@ class MainWindow(QMainWindow):
         # if on_table was never called (e.g. in tests that mock extract_tables).
         if self.xlsx_panel.combo.count() == 0 and tables:
             self.xlsx_panel.load_tables(tables)
-        self.btn_convert.setEnabled(True)
         self.btn_save.setEnabled(True)
         self.progress_bar.setValue(100)
         self.progress_bar.setVisible(False)
         self.statusBar().showMessage(f"Extracted {len(tables)} table(s)")
 
     def _on_conversion_error(self, msg):
-        self.btn_convert.setEnabled(True)
         self.progress_bar.setVisible(False)
         self.statusBar().showMessage(f"Error: {msg}")
 
@@ -161,8 +152,9 @@ class MainWindow(QMainWindow):
 
     def _on_save(self):
         from pdf2xlsx.writer import write_xlsx
+        default = str(Path(self._pdf_path).with_suffix(".xlsx")) if self._pdf_path else ""
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save XLSX", "", "Excel Files (*.xlsx)"
+            self, "Save XLSX", default, "Excel Files (*.xlsx)"
         )
         if path:
             write_xlsx(self._tables, Path(path))
