@@ -59,7 +59,21 @@ class XlsxPanel(QWidget):
             self.stack.setCurrentIndex(0)
 
     def add_table(self, table):
-        """Append a single table entry (used for progressive display)."""
+        """Add or replace a table entry.  If a table for this page already exists
+        and the new one has more data, replace it in-place (upsert semantics)."""
+        for i, existing in enumerate(self._tables):
+            if existing.page == table.page:
+                self._tables[i] = table
+                new_widget = self._make_table(table.rows)
+                old_widget = self.stack.widget(i)
+                self.stack.removeWidget(old_widget)
+                old_widget.deleteLater()
+                self.stack.insertWidget(i, new_widget)
+                self.combo.setItemText(i, self._combo_label(table))
+                if self.combo.currentIndex() == i:
+                    self.stack.setCurrentIndex(i)
+                return
+        # New page — append
         self._tables.append(table)
         tbl = self._make_table(table.rows)
         self.stack.addWidget(tbl)

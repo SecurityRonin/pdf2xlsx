@@ -346,19 +346,36 @@ def extract_tables(
         "img2table":       lambda: _extract_img2table(path),
     }
 
+    # page -> (best_score, tables) seen so far across completed engines
+    page_best: dict[int, tuple[float, list[ExtractedTable]]] = {}
+
+    def emit_improvements(tables: list[ExtractedTable]) -> None:
+        """Emit on_table for any page where these tables beat the current best."""
+        if not on_table:
+            return
+        by_page: dict[int, list[ExtractedTable]] = {}
+        for t in tables:
+            by_page.setdefault(t.page, []).append(t)
+        for page in sorted(by_page):
+            page_tables = by_page[page]
+            score = _score_tables(page_tables)
+            if score > page_best.get(page, (0.0,))[0]:
+                page_best[page] = (score, page_tables)
+                for t in page_tables:
+                    on_table(t)
+
     engine_results: dict[str, list[ExtractedTable]] = {}
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures = {executor.submit(fn): name for name, fn in engine_fns.items()}
         for future in as_completed(futures):
             name = futures[future]
             try:
-                engine_results[name] = future.result()
+                result_tables = future.result()
             except Exception:
-                engine_results[name] = []
+                result_tables = []
+            engine_results[name] = result_tables
+            emit_improvements(result_tables)   # <-- progressive emission
 
+    # Final authoritative selection (consistent with what was progressively emitted)
     merged = _select_best_per_page(engine_results)
-    result = [t for t in merged if not t.is_empty]
-    if on_table:
-        for t in result:
-            on_table(t)
-    return result
+    return [t for t in merged if not t.is_empty]
