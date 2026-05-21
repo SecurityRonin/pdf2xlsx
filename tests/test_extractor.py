@@ -5,7 +5,7 @@ from collections import defaultdict
 from unittest.mock import patch, MagicMock
 from pdf2xlsx.extractor import (
     extract_tables, _merge_continuation_tables, _select_best_per_page,
-    _pages_with_drawn_lines, _IMG2TABLE_ZOOM, _score_tables, _ENGINE_TIMEOUT,
+    _IMG2TABLE_ZOOM, _score_tables, _ENGINE_TIMEOUT,
     _clean_rows,
 )
 from pdf2xlsx.models import ExtractedTable
@@ -169,13 +169,30 @@ def test_borderless_rows_recovered_via_two_pass(term_sheet):
 # Five-engine concurrent extraction
 # ---------------------------------------------------------------------------
 
-def test_all_five_engines_called(annual_report):
-    """extract_tables must invoke all 5 engine functions."""
+def test_camelot_engines_removed():
+    """_extract_camelot_lattice and _extract_camelot_stream must not exist.
+
+    Both depend on Ghostscript (hangs on large PDFs); img2table covers bordered
+    tables via MuPDF, pdfplumber/pymupdf cover text-based tables.
+    """
+    import pdf2xlsx.extractor as mod
+    assert not hasattr(mod, '_extract_camelot_lattice'), (
+        "_extract_camelot_lattice must be removed; img2table covers bordered tables via MuPDF"
+    )
+    assert not hasattr(mod, '_extract_camelot_stream'), (
+        "_extract_camelot_stream must be removed; pdfplumber/pymupdf cover text-based tables"
+    )
+
+
+def test_all_three_engines_called(annual_report):
+    """extract_tables must invoke exactly the 3 MuPDF-based engine functions.
+
+    camelot_lattice and camelot_stream are removed: they depend on Ghostscript
+    (slow, hangs) while img2table already covers bordered-table detection via MuPDF.
+    """
     called = []
     real_pdfplumber = __import__('pdf2xlsx.extractor', fromlist=['_extract_pdfplumber'])._extract_pdfplumber
     real_pymupdf    = __import__('pdf2xlsx.extractor', fromlist=['_extract_pymupdf'])._extract_pymupdf
-    real_cl         = __import__('pdf2xlsx.extractor', fromlist=['_extract_camelot_lattice'])._extract_camelot_lattice
-    real_cs         = __import__('pdf2xlsx.extractor', fromlist=['_extract_camelot_stream'])._extract_camelot_stream
     real_i2t        = __import__('pdf2xlsx.extractor', fromlist=['_extract_img2table'])._extract_img2table
 
     def spy(fn, name):
@@ -184,32 +201,28 @@ def test_all_five_engines_called(annual_report):
             return fn(*a, **kw)
         return wrapper
 
-    with patch('pdf2xlsx.extractor._extract_pdfplumber',   spy(real_pdfplumber, 'pdfplumber')), \
-         patch('pdf2xlsx.extractor._extract_pymupdf',      spy(real_pymupdf,    'pymupdf')), \
-         patch('pdf2xlsx.extractor._extract_camelot_lattice', spy(real_cl,      'camelot_lattice')), \
-         patch('pdf2xlsx.extractor._extract_camelot_stream',  spy(real_cs,      'camelot_stream')), \
-         patch('pdf2xlsx.extractor._extract_img2table',    spy(real_i2t,        'img2table')):
+    with patch('pdf2xlsx.extractor._extract_pdfplumber', spy(real_pdfplumber, 'pdfplumber')), \
+         patch('pdf2xlsx.extractor._extract_pymupdf',    spy(real_pymupdf,    'pymupdf')), \
+         patch('pdf2xlsx.extractor._extract_img2table',  spy(real_i2t,        'img2table')):
         extract_tables(annual_report)
 
-    assert set(called) == {'pdfplumber', 'pymupdf', 'camelot_lattice', 'camelot_stream', 'img2table'}, (
-        f"Expected all 5 engines called, got: {set(called)}"
+    assert set(called) == {'pdfplumber', 'pymupdf', 'img2table'}, (
+        f"Expected exactly 3 engines called, got: {set(called)}"
     )
 
 
 def test_engines_run_concurrently(annual_report):
-    """All 5 engines must run in parallel: wall time < sum of individual delays."""
+    """All 3 engines must run in parallel: wall time < sum of individual delays."""
     DELAY = 0.15  # seconds per engine
-    total_sequential = DELAY * 5  # 0.75s if sequential
+    total_sequential = DELAY * 3  # 0.45s if sequential
 
     def slow_engine(path, **kw):
         time.sleep(DELAY)
         return []
 
-    with patch('pdf2xlsx.extractor._extract_pdfplumber',      slow_engine), \
-         patch('pdf2xlsx.extractor._extract_pymupdf',         slow_engine), \
-         patch('pdf2xlsx.extractor._extract_camelot_lattice', slow_engine), \
-         patch('pdf2xlsx.extractor._extract_camelot_stream',  slow_engine), \
-         patch('pdf2xlsx.extractor._extract_img2table',       slow_engine):
+    with patch('pdf2xlsx.extractor._extract_pdfplumber', slow_engine), \
+         patch('pdf2xlsx.extractor._extract_pymupdf',    slow_engine), \
+         patch('pdf2xlsx.extractor._extract_img2table',  slow_engine):
         t0 = time.monotonic()
         extract_tables(annual_report)
         elapsed = time.monotonic() - t0
@@ -224,10 +237,8 @@ def test_engine_failure_does_not_crash(annual_report):
     def boom(path, **kw):
         raise RuntimeError("simulated engine failure")
 
-    real_pdfplumber = __import__('pdf2xlsx.extractor', fromlist=['_extract_pdfplumber'])._extract_pdfplumber
-    with patch('pdf2xlsx.extractor._extract_camelot_lattice', boom), \
-         patch('pdf2xlsx.extractor._extract_camelot_stream',  boom), \
-         patch('pdf2xlsx.extractor._extract_img2table',       boom):
+    with patch('pdf2xlsx.extractor._extract_pymupdf',   boom), \
+         patch('pdf2xlsx.extractor._extract_img2table', boom):
         tables = extract_tables(annual_report)
     assert isinstance(tables, list), "Must return a list even when engines fail"
 
@@ -377,133 +388,6 @@ def test_img2table_zoom_is_at_most_one():
     )
 
 
-# ---------------------------------------------------------------------------
-# _pages_with_drawn_lines — line detection for camelot lattice gating
-# ---------------------------------------------------------------------------
-
-@pytest.fixture
-def pdf_with_rect(tmp_path):
-    """Single-page PDF containing a drawn rectangle (simulated table border)."""
-    import fitz
-    doc = fitz.open()
-    page = doc.new_page()
-    page.draw_rect(fitz.Rect(50, 50, 300, 200), color=(0, 0, 0), width=1)
-    path = tmp_path / "with_rect.pdf"
-    doc.save(str(path))
-    doc.close()
-    return path
-
-
-@pytest.fixture
-def pdf_with_hline(tmp_path):
-    """Single-page PDF containing a long horizontal drawn line."""
-    import fitz
-    doc = fitz.open()
-    page = doc.new_page()
-    page.draw_line(fitz.Point(50, 100), fitz.Point(350, 100), color=(0, 0, 0), width=1)
-    path = tmp_path / "with_line.pdf"
-    doc.save(str(path))
-    doc.close()
-    return path
-
-
-@pytest.fixture
-def pdf_text_only(tmp_path):
-    """Single-page PDF with only text, no drawn lines."""
-    import fitz
-    doc = fitz.open()
-    page = doc.new_page()
-    page.insert_text((50, 50), "Hello world\nNo lines here")
-    path = tmp_path / "text_only.pdf"
-    doc.save(str(path))
-    doc.close()
-    return path
-
-
-def test_pages_with_drawn_lines_detects_rect(pdf_with_rect):
-    """A page with a drawn rectangle must be returned."""
-    pages = _pages_with_drawn_lines(pdf_with_rect)
-    assert 1 in pages, f"Page 1 (has rect) must be in result, got {pages}"
-
-
-def test_pages_with_drawn_lines_detects_hline(pdf_with_hline):
-    """A page with a long horizontal line must be returned."""
-    pages = _pages_with_drawn_lines(pdf_with_hline)
-    assert 1 in pages, f"Page 1 (has h-line) must be in result, got {pages}"
-
-
-def test_pages_with_drawn_lines_empty_on_text_only(pdf_text_only):
-    """A text-only page with no drawn lines must not be returned."""
-    pages = _pages_with_drawn_lines(pdf_text_only)
-    assert 1 not in pages, f"Text-only page must not be detected as having lines, got {pages}"
-
-
-def test_pages_with_drawn_lines_multipage(tmp_path):
-    """Only pages with drawn lines should be returned; text-only pages excluded."""
-    import fitz
-    doc = fitz.open()
-    p1 = doc.new_page()
-    p1.insert_text((50, 50), "Text only")                              # page 1: no lines
-    p2 = doc.new_page()
-    p2.draw_rect(fitz.Rect(50, 50, 300, 200), color=(0, 0, 0), width=1)  # page 2: rect
-    p3 = doc.new_page()
-    p3.insert_text((50, 50), "Also text only")                          # page 3: no lines
-    path = tmp_path / "multi.pdf"
-    doc.save(str(path))
-    doc.close()
-    pages = _pages_with_drawn_lines(path)
-    assert pages == {2}, f"Expected only page 2, got {pages}"
-
-
-# ---------------------------------------------------------------------------
-# camelot lattice page filtering
-# ---------------------------------------------------------------------------
-
-def test_camelot_stream_returns_empty_on_subprocess_timeout(tmp_path):
-    """_extract_camelot_stream must run in a subprocess and return [] on timeout.
-
-    Thread-based timeout leaves a zombie thread that cannot be killed; subprocess
-    timeout (subprocess.TimeoutExpired) actually kills the child process via the OS.
-    This test verifies that _extract_camelot_stream uses subprocess.run so that
-    it is killable, and returns [] when the subprocess times out.
-    """
-    import fitz
-    import subprocess as _subprocess
-
-    doc = fitz.open()
-    doc.new_page().insert_text((50, 50), "test")
-    path = tmp_path / "test.pdf"
-    doc.save(str(path))
-    doc.close()
-
-    with patch.dict('sys.modules', {'camelot': MagicMock()}), \
-         patch('pdf2xlsx.extractor.subprocess.run',
-               side_effect=_subprocess.TimeoutExpired(cmd='python', timeout=60)):
-        from pdf2xlsx.extractor import _extract_camelot_stream
-        result = _extract_camelot_stream(path)
-
-    assert result == [], (
-        f"_extract_camelot_stream must return [] when subprocess times out; got {result!r}"
-    )
-
-
-def test_camelot_lattice_skips_all_when_no_lines(tmp_path):
-    """camelot_lattice must not call camelot.read_pdf when no pages have drawn lines."""
-    pytest.importorskip("camelot", reason="camelot not installed")
-    import fitz
-    doc = fitz.open()
-    doc.new_page().insert_text((50, 50), "No lines")
-    path = tmp_path / "nolines.pdf"
-    doc.save(str(path))
-    doc.close()
-
-    with patch('camelot.read_pdf') as mock_read:
-        from pdf2xlsx.extractor import _extract_camelot_lattice
-        result = _extract_camelot_lattice(path)
-    mock_read.assert_not_called(), "camelot.read_pdf must not be called on line-free PDF"
-    assert result == []
-
-
 def test_on_table_called_before_slow_engines_finish(annual_report):
     """on_table must fire as soon as the first engine has results, not after all finish."""
     SLOW = 1.5
@@ -514,11 +398,9 @@ def test_on_table_called_before_slow_engines_finish(annual_report):
     def slow_engine(path, **kw): time.sleep(SLOW); return []
 
     t0 = time.monotonic()
-    with patch('pdf2xlsx.extractor._extract_pdfplumber',      fast_engine), \
-         patch('pdf2xlsx.extractor._extract_pymupdf',         slow_engine), \
-         patch('pdf2xlsx.extractor._extract_camelot_lattice', slow_engine), \
-         patch('pdf2xlsx.extractor._extract_camelot_stream',  slow_engine), \
-         patch('pdf2xlsx.extractor._extract_img2table',       slow_engine):
+    with patch('pdf2xlsx.extractor._extract_pdfplumber', fast_engine), \
+         patch('pdf2xlsx.extractor._extract_pymupdf',    slow_engine), \
+         patch('pdf2xlsx.extractor._extract_img2table',  slow_engine):
         extract_tables(annual_report, on_table=lambda t: first_call_time.append(time.monotonic()))
 
     assert first_call_time, "on_table must be called at least once"
@@ -539,11 +421,9 @@ def test_on_table_called_again_when_better_result_arrives(annual_report):
     def dense_engine(path, **kw):  time.sleep(0.05); return dense
     def empty_engine(path, **kw):  return []
 
-    with patch('pdf2xlsx.extractor._extract_pdfplumber',      sparse_engine), \
-         patch('pdf2xlsx.extractor._extract_pymupdf',         dense_engine), \
-         patch('pdf2xlsx.extractor._extract_camelot_lattice', empty_engine), \
-         patch('pdf2xlsx.extractor._extract_camelot_stream',  empty_engine), \
-         patch('pdf2xlsx.extractor._extract_img2table',       empty_engine):
+    with patch('pdf2xlsx.extractor._extract_pdfplumber', sparse_engine), \
+         patch('pdf2xlsx.extractor._extract_pymupdf',    dense_engine), \
+         patch('pdf2xlsx.extractor._extract_img2table',  empty_engine):
         extract_tables(annual_report, on_table=calls.append)
 
     page1 = [t for t in calls if t.page == 1]
@@ -576,11 +456,9 @@ def test_engine_timeout_does_not_block(annual_report):
 
     t0 = time.monotonic()
     with patch.object(extractor_mod, '_ENGINE_TIMEOUT', SHORT_TIMEOUT), \
-         patch('pdf2xlsx.extractor._extract_pdfplumber',      fast_engine), \
-         patch('pdf2xlsx.extractor._extract_pymupdf',         fast_engine), \
-         patch('pdf2xlsx.extractor._extract_camelot_lattice', fast_engine), \
-         patch('pdf2xlsx.extractor._extract_camelot_stream',  hanging_engine), \
-         patch('pdf2xlsx.extractor._extract_img2table',       fast_engine):
+         patch('pdf2xlsx.extractor._extract_pdfplumber', fast_engine), \
+         patch('pdf2xlsx.extractor._extract_pymupdf',    fast_engine), \
+         patch('pdf2xlsx.extractor._extract_img2table',  hanging_engine):
         tables = extract_tables(annual_report)
     elapsed = time.monotonic() - t0
     hang_event.set()  # release stuck thread so it can exit cleanly
@@ -592,24 +470,3 @@ def test_engine_timeout_does_not_block(annual_report):
     assert isinstance(tables, list), "Must still return a list when an engine times out"
 
 
-def test_camelot_lattice_passes_only_line_pages(tmp_path):
-    """camelot_lattice must call camelot.read_pdf with only pages that have drawn lines."""
-    pytest.importorskip("camelot", reason="camelot not installed")
-    import fitz
-    doc = fitz.open()
-    doc.new_page().insert_text((50, 50), "Text only")                           # p1 no lines
-    doc.new_page().draw_rect(fitz.Rect(50,50,300,200), color=(0,0,0), width=1)  # p2 has rect
-    doc.new_page().insert_text((50, 50), "Text only")                           # p3 no lines
-    path = tmp_path / "filtered.pdf"
-    doc.save(str(path))
-    doc.close()
-
-    with patch('camelot.read_pdf', return_value=[]) as mock_read:
-        from pdf2xlsx.extractor import _extract_camelot_lattice
-        _extract_camelot_lattice(path)
-    mock_read.assert_called_once()
-    call_kwargs = mock_read.call_args
-    pages_arg = call_kwargs.kwargs.get('pages') or call_kwargs.args[1]
-    assert pages_arg == '2', (
-        f"camelot.read_pdf must be called with pages='2', got pages={pages_arg!r}"
-    )
