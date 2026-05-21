@@ -459,6 +459,34 @@ def test_pages_with_drawn_lines_multipage(tmp_path):
 # camelot lattice page filtering
 # ---------------------------------------------------------------------------
 
+def test_camelot_stream_returns_empty_on_subprocess_timeout(tmp_path):
+    """_extract_camelot_stream must run in a subprocess and return [] on timeout.
+
+    Thread-based timeout leaves a zombie thread that cannot be killed; subprocess
+    timeout (subprocess.TimeoutExpired) actually kills the child process via the OS.
+    This test verifies that _extract_camelot_stream uses subprocess.run so that
+    it is killable, and returns [] when the subprocess times out.
+    """
+    import fitz
+    import subprocess as _subprocess
+
+    doc = fitz.open()
+    doc.new_page().insert_text((50, 50), "test")
+    path = tmp_path / "test.pdf"
+    doc.save(str(path))
+    doc.close()
+
+    with patch.dict('sys.modules', {'camelot': MagicMock()}), \
+         patch('pdf2xlsx.extractor.subprocess.run',
+               side_effect=_subprocess.TimeoutExpired(cmd='python', timeout=60)):
+        from pdf2xlsx.extractor import _extract_camelot_stream
+        result = _extract_camelot_stream(path)
+
+    assert result == [], (
+        f"_extract_camelot_stream must return [] when subprocess times out; got {result!r}"
+    )
+
+
 def test_camelot_lattice_skips_all_when_no_lines(tmp_path):
     """camelot_lattice must not call camelot.read_pdf when no pages have drawn lines."""
     pytest.importorskip("camelot", reason="camelot not installed")
