@@ -9,7 +9,7 @@ from pdf2xlsx.postprocess import postprocess_rows
 
 _YEAR_RE = re.compile(r'^20\d\d$')
 _LARGE_NUM_RE = re.compile(r'^[\d,]{4,}$')   # comma-formatted numbers ≥4 digits
-_CAMEL_SPLIT_RE = re.compile(r'([a-z])([A-Z])')  # split "wordWord" → "word Word"
+_STUCK_SPLIT_RE = re.compile(r'([a-z.,;:()])([A-Z])')  # split at camelCase or punct+uppercase
 
 _IMG2TABLE_ZOOM  = 1.0        # render zoom for img2table; 1.0 avoids 4× memory/time of 2.0
 _LINE_MIN_LEN    = 20.0       # pt — minimum h/v line length to count as a table border
@@ -57,7 +57,7 @@ def _clean_rows(raw: list[list]) -> list[list[str]]:
             # _is_stuck_word is defined later in this module but resolved at
             # call time, not definition time — safe to reference here.
             if _is_stuck_word(s):
-                s = _CAMEL_SPLIT_RE.sub(r'\1 \2', s)
+                s = _STUCK_SPLIT_RE.sub(r'\1 \2', s)
             cleaned.append(s)
         rows.append(cleaned)
     return rows
@@ -297,12 +297,18 @@ def _merge_continuation_tables(tables: list[ExtractedTable]) -> list[ExtractedTa
 
 
 def _is_stuck_word(cell: str) -> bool:
-    """True when a cell looks like words concatenated without spaces."""
+    """True when a cell looks like mixed-case words concatenated without spaces.
+
+    All-uppercase strings (e.g. 'NOTESTOCONSOLIDATEDFINANCIALST') are excluded:
+    they cannot be split without word-segmentation NLP and may be legitimate
+    acronyms or abbreviation strings.
+    """
     s = cell.strip()
     return (
         len(s) > 20
         and ' ' not in s
         and any(c.isupper() for c in s[1:])
+        and any(c.islower() for c in s)      # must be mixed case, not all-caps
         and not s.startswith('$')
         and not s.replace(',', '').replace('.', '').replace('-', '').isnumeric()
     )
