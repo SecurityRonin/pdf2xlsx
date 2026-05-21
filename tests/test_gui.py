@@ -600,6 +600,55 @@ def test_xlsx_panel_add_table_appends_tab(qtbot):
     assert panel.combo.count() == 2
 
 
+def test_add_table_same_page_upserts_not_appends(qtbot):
+    """Adding a table for a page that already has an entry must replace it, not append."""
+    from pdf2xlsx.gui.xlsx_panel import XlsxPanel
+    from pdf2xlsx.models import ExtractedTable
+    panel = XlsxPanel()
+    qtbot.addWidget(panel)
+    t1 = ExtractedTable(page=5, index=0, rows=[["A", "B"], ["1", "2"]], source="pdfplumber")
+    t2 = ExtractedTable(page=5, index=0, rows=[["A", "B"], ["1", "2"], ["3", "4"]], source="camelot_lattice")
+    panel.add_table(t1)
+    panel.add_table(t2)
+    assert panel.combo.count() == 1, (
+        f"Same-page add must upsert (1 entry), got {panel.combo.count()}"
+    )
+
+
+def test_add_table_upsert_updates_combo_label(qtbot):
+    """Upserting a table must update the combo label to reflect the new source."""
+    from pdf2xlsx.gui.xlsx_panel import XlsxPanel
+    from pdf2xlsx.models import ExtractedTable
+    panel = XlsxPanel()
+    qtbot.addWidget(panel)
+    t1 = ExtractedTable(page=3, index=0, rows=[["H"], ["v"]], source="pdfplumber")
+    t2 = ExtractedTable(page=3, index=0, rows=[["H"], ["v"], ["w"]], source="camelot_lattice")
+    panel.add_table(t1)
+    panel.add_table(t2)
+    label = panel.combo.itemText(0)
+    assert "camelot_lattice" in label, (
+        f"Combo label must show updated source 'camelot_lattice', got {label!r}"
+    )
+
+
+def test_add_table_upsert_updates_stack_widget(qtbot):
+    """Upserting a table must replace the stack widget so the new row count is visible."""
+    from pdf2xlsx.gui.xlsx_panel import XlsxPanel
+    from pdf2xlsx.models import ExtractedTable
+    panel = XlsxPanel()
+    qtbot.addWidget(panel)
+    t1 = ExtractedTable(page=2, index=0, rows=[["H", "V"], ["1", "2"]], source="pdfplumber")
+    t2 = ExtractedTable(page=2, index=0, rows=[["H", "V"], ["1", "2"], ["3", "4"], ["5", "6"]], source="img2table")
+    panel.add_table(t1)
+    panel.add_table(t2)
+    from PySide6.QtWidgets import QTableWidget
+    tbl = panel.stack.widget(0)
+    assert isinstance(tbl, QTableWidget)
+    assert tbl.rowCount() == 4, (
+        f"Stack widget must reflect upserted table (4 rows), got {tbl.rowCount()}"
+    )
+
+
 def test_worker_emits_table_found_per_table(qtbot, tmp_path):
     """ConversionWorker must emit table_found for each table as it's extracted."""
     from pdf2xlsx.gui.main_window import _ConversionWorker

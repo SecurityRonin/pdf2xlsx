@@ -383,6 +383,57 @@ def test_camelot_lattice_skips_all_when_no_lines(tmp_path):
     assert result == []
 
 
+def test_on_table_called_before_slow_engines_finish(annual_report):
+    """on_table must fire as soon as the first engine has results, not after all finish."""
+    SLOW = 1.5
+    fast_result = [ExtractedTable(page=1, index=0, rows=[["H","V"],["a","1"]], source="fast")]
+
+    first_call_time = []
+    def fast_engine(path, **kw): return fast_result
+    def slow_engine(path, **kw): time.sleep(SLOW); return []
+
+    t0 = time.monotonic()
+    with patch('pdf2xlsx.extractor._extract_pdfplumber',      fast_engine), \
+         patch('pdf2xlsx.extractor._extract_pymupdf',         slow_engine), \
+         patch('pdf2xlsx.extractor._extract_camelot_lattice', slow_engine), \
+         patch('pdf2xlsx.extractor._extract_camelot_stream',  slow_engine), \
+         patch('pdf2xlsx.extractor._extract_img2table',       slow_engine):
+        extract_tables(annual_report, on_table=lambda t: first_call_time.append(time.monotonic()))
+
+    assert first_call_time, "on_table must be called at least once"
+    elapsed = first_call_time[0] - t0
+    assert elapsed < SLOW * 0.8, (
+        f"on_table must fire before slow engines finish; "
+        f"first call at {elapsed:.2f}s, slow engines take {SLOW}s"
+    )
+
+
+def test_on_table_called_again_when_better_result_arrives(annual_report):
+    """on_table must be called a second time for a page when a later engine beats the first."""
+    sparse = [ExtractedTable(page=1, index=0, rows=[["H","V"],["",""]],         source="sparse")]
+    dense  = [ExtractedTable(page=1, index=0, rows=[["H","V"],["a","1"],["b","2"],["c","3"]], source="dense")]
+
+    calls = []
+    def sparse_engine(path, **kw): return sparse
+    def dense_engine(path, **kw):  time.sleep(0.05); return dense
+    def empty_engine(path, **kw):  return []
+
+    with patch('pdf2xlsx.extractor._extract_pdfplumber',      sparse_engine), \
+         patch('pdf2xlsx.extractor._extract_pymupdf',         dense_engine), \
+         patch('pdf2xlsx.extractor._extract_camelot_lattice', empty_engine), \
+         patch('pdf2xlsx.extractor._extract_camelot_stream',  empty_engine), \
+         patch('pdf2xlsx.extractor._extract_img2table',       empty_engine):
+        extract_tables(annual_report, on_table=calls.append)
+
+    page1 = [t for t in calls if t.page == 1]
+    assert len(page1) >= 2, (
+        f"on_table must fire at least twice for page 1 (initial + improvement); got {len(page1)}"
+    )
+    assert any(t.source == "dense" for t in page1), (
+        f"Dense engine result must appear in on_table calls; sources seen: {[t.source for t in page1]}"
+    )
+
+
 def test_camelot_lattice_passes_only_line_pages(tmp_path):
     """camelot_lattice must call camelot.read_pdf with only pages that have drawn lines."""
     import fitz
