@@ -314,6 +314,33 @@ def test_select_best_per_page_rejects_stuck_words():
     )
 
 
+def test_select_best_per_page_hard_rejects_stuck_words_when_clean_available():
+    """A clean engine with few cells must beat a stuck-word engine with many cells.
+
+    This guards against the -10 soft penalty being overwhelmed by sheer cell
+    count when camelot_stream dumps paragraph text as table rows.
+    """
+    # 50 clean cells + 1 stuck word:
+    # with soft penalty: score = 50 + row_bonus - 10 = 40+ → BAD ENGINE WINS
+    stuck_rows = [['Name', 'Amount']] + [
+        [f'Item{i}', str(i * 100)] for i in range(23)
+    ] + [['DigitalLabsservesasthecompanywidehub', '99']]  # 1 stuck-word cell
+    stuck_result = [ExtractedTable(page=3, index=0, source='stream', rows=stuck_rows)]
+
+    # 3 clean cells — fewer than stuck engine, but zero stuck words
+    clean_result = [ExtractedTable(page=3, index=0, source='plumber', rows=[
+        ['Name', 'Amount'],
+        ['Digital Labs', '100'],
+    ])]
+
+    result = _select_best_per_page({'stream': stuck_result, 'plumber': clean_result})
+    assert len(result) == 1
+    assert result[0].source == 'plumber', (
+        f"Clean engine must win even when stuck engine has more cells; "
+        f"got source={result[0].source!r}"
+    )
+
+
 def test_img2table_zoom_is_at_most_one():
     """_IMG2TABLE_ZOOM must be ≤ 1.0 to avoid 4× memory/time overhead."""
     assert _IMG2TABLE_ZOOM <= 1.0, (
