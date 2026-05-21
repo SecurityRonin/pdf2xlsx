@@ -1,7 +1,9 @@
 import pytest
+import time
 from pathlib import Path
 from collections import defaultdict
-from pdf2xlsx.extractor import extract_tables, _merge_continuation_tables
+from unittest.mock import patch, MagicMock
+from pdf2xlsx.extractor import extract_tables, _merge_continuation_tables, _select_best_per_page
 from pdf2xlsx.models import ExtractedTable
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -157,6 +159,97 @@ def test_borderless_rows_recovered_via_two_pass(term_sheet):
         f"Expected ≥10 rows on p.64, got {total_rows} across {len(p64)} table(s). "
         "Borderless rows from executives without PDF border lines may be missing."
     )
+
+
+# ---------------------------------------------------------------------------
+# Five-engine concurrent extraction
+# ---------------------------------------------------------------------------
+
+def test_all_five_engines_called(annual_report):
+    """extract_tables must invoke all 5 engine functions."""
+    called = []
+    real_pdfplumber = __import__('pdf2xlsx.extractor', fromlist=['_extract_pdfplumber'])._extract_pdfplumber
+    real_pymupdf    = __import__('pdf2xlsx.extractor', fromlist=['_extract_pymupdf'])._extract_pymupdf
+    real_cl         = __import__('pdf2xlsx.extractor', fromlist=['_extract_camelot_lattice'])._extract_camelot_lattice
+    real_cs         = __import__('pdf2xlsx.extractor', fromlist=['_extract_camelot_stream'])._extract_camelot_stream
+    real_i2t        = __import__('pdf2xlsx.extractor', fromlist=['_extract_img2table'])._extract_img2table
+
+    def spy(fn, name):
+        def wrapper(*a, **kw):
+            called.append(name)
+            return fn(*a, **kw)
+        return wrapper
+
+    with patch('pdf2xlsx.extractor._extract_pdfplumber',   spy(real_pdfplumber, 'pdfplumber')), \
+         patch('pdf2xlsx.extractor._extract_pymupdf',      spy(real_pymupdf,    'pymupdf')), \
+         patch('pdf2xlsx.extractor._extract_camelot_lattice', spy(real_cl,      'camelot_lattice')), \
+         patch('pdf2xlsx.extractor._extract_camelot_stream',  spy(real_cs,      'camelot_stream')), \
+         patch('pdf2xlsx.extractor._extract_img2table',    spy(real_i2t,        'img2table')):
+        extract_tables(annual_report)
+
+    assert set(called) == {'pdfplumber', 'pymupdf', 'camelot_lattice', 'camelot_stream', 'img2table'}, (
+        f"Expected all 5 engines called, got: {set(called)}"
+    )
+
+
+def test_engines_run_concurrently(annual_report):
+    """All 5 engines must run in parallel: wall time < sum of individual delays."""
+    DELAY = 0.15  # seconds per engine
+    total_sequential = DELAY * 5  # 0.75s if sequential
+
+    def slow_engine(path, **kw):
+        time.sleep(DELAY)
+        return []
+
+    with patch('pdf2xlsx.extractor._extract_pdfplumber',      slow_engine), \
+         patch('pdf2xlsx.extractor._extract_pymupdf',         slow_engine), \
+         patch('pdf2xlsx.extractor._extract_camelot_lattice', slow_engine), \
+         patch('pdf2xlsx.extractor._extract_camelot_stream',  slow_engine), \
+         patch('pdf2xlsx.extractor._extract_img2table',       slow_engine):
+        t0 = time.monotonic()
+        extract_tables(annual_report)
+        elapsed = time.monotonic() - t0
+
+    assert elapsed < total_sequential * 0.6, (
+        f"Engines appear sequential: wall time {elapsed:.2f}s ≥ {total_sequential * 0.6:.2f}s threshold"
+    )
+
+
+def test_engine_failure_does_not_crash(annual_report):
+    """If one engine raises, extract_tables must still return results from others."""
+    def boom(path, **kw):
+        raise RuntimeError("simulated engine failure")
+
+    real_pdfplumber = __import__('pdf2xlsx.extractor', fromlist=['_extract_pdfplumber'])._extract_pdfplumber
+    with patch('pdf2xlsx.extractor._extract_camelot_lattice', boom), \
+         patch('pdf2xlsx.extractor._extract_camelot_stream',  boom), \
+         patch('pdf2xlsx.extractor._extract_img2table',       boom):
+        tables = extract_tables(annual_report)
+    assert isinstance(tables, list), "Must return a list even when engines fail"
+
+
+def test_select_best_per_page_prefers_more_data():
+    """_select_best_per_page must choose the engine with the most non-empty cells."""
+    sparse = [ExtractedTable(page=1, index=0, source='a', rows=[
+        ['H1', 'H2'], ['', ''], ['', ''],
+    ])]
+    dense = [ExtractedTable(page=1, index=0, source='b', rows=[
+        ['H1', 'H2'], ['v1', 'v2'], ['v3', 'v4'], ['v5', 'v6'],
+    ])]
+    result = _select_best_per_page({'sparse_engine': sparse, 'dense_engine': dense})
+    assert len(result) == 1
+    assert result[0].source == 'b', (
+        f"Expected dense engine 'b' to win, got '{result[0].source}'"
+    )
+
+
+def test_select_best_per_page_combines_different_pages():
+    """Each page uses the best engine independently."""
+    eng_a = [ExtractedTable(page=1, index=0, source='a', rows=[['H'], ['v1'], ['v2']])]
+    eng_b = [ExtractedTable(page=2, index=0, source='b', rows=[['X'], ['y1'], ['y2']])]
+    result = _select_best_per_page({'a': eng_a, 'b': eng_b})
+    pages = {t.page: t.source for t in result}
+    assert pages == {1: 'a', 2: 'b'}, f"Expected each page from its best engine, got {pages}"
 
 
 def test_no_stuck_words_in_cells(general_ledger):
