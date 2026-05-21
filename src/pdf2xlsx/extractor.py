@@ -10,8 +10,9 @@ from pdf2xlsx.postprocess import postprocess_rows
 _YEAR_RE = re.compile(r'^20\d\d$')
 _LARGE_NUM_RE = re.compile(r'^[\d,]{4,}$')   # comma-formatted numbers ≥4 digits
 
-_IMG2TABLE_ZOOM = 1.0        # render zoom for img2table; 1.0 avoids 4× memory/time of 2.0
-_LINE_MIN_LEN   = 20.0       # pt — minimum h/v line length to count as a table border
+_IMG2TABLE_ZOOM  = 1.0        # render zoom for img2table; 1.0 avoids 4× memory/time of 2.0
+_LINE_MIN_LEN    = 20.0       # pt — minimum h/v line length to count as a table border
+_ENGINE_TIMEOUT  = 120        # seconds — per-engine wall-clock budget; camelot can hang
 
 
 def _pages_with_drawn_lines(path: Path, min_len: float = _LINE_MIN_LEN) -> set[int]:
@@ -389,9 +390,10 @@ def extract_tables(
                     on_table(t)
 
     engine_results: dict[str, list[ExtractedTable]] = {}
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {executor.submit(fn): name for name, fn in engine_fns.items()}
-        for future in as_completed(futures):
+    executor = ThreadPoolExecutor(max_workers=5)
+    futures = {executor.submit(fn): name for name, fn in engine_fns.items()}
+    try:
+        for future in as_completed(futures, timeout=_ENGINE_TIMEOUT):
             name = futures[future]
             try:
                 result_tables = future.result()
@@ -399,6 +401,12 @@ def extract_tables(
                 result_tables = []
             engine_results[name] = result_tables
             emit_improvements(result_tables)   # <-- progressive emission
+    except TimeoutError:
+        # One or more engines exceeded the per-call budget; treat them as empty.
+        for fut, name in futures.items():
+            engine_results.setdefault(name, [])
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     # Final authoritative selection (consistent with what was progressively emitted)
     merged = _select_best_per_page(engine_results)
