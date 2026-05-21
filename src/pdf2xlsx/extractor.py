@@ -10,6 +10,40 @@ from pdf2xlsx.postprocess import postprocess_rows
 _YEAR_RE = re.compile(r'^20\d\d$')
 _LARGE_NUM_RE = re.compile(r'^[\d,]{4,}$')   # comma-formatted numbers ≥4 digits
 
+_IMG2TABLE_ZOOM = 1.0        # render zoom for img2table; 1.0 avoids 4× memory/time of 2.0
+_LINE_MIN_LEN   = 20.0       # pt — minimum h/v line length to count as a table border
+
+
+def _pages_with_drawn_lines(path: Path, min_len: float = _LINE_MIN_LEN) -> set[int]:
+    """
+    Return 1-based page numbers that contain horizontal or vertical drawn lines
+    (or rectangles) of at least min_len points — a fast proxy for bordered tables.
+
+    Uses pymupdf's vector-path reader; no image rendering required, so this
+    runs in <1 s even on 200-page documents.
+    """
+    pages: set[int] = set()
+    doc = fitz.open(str(path))
+    for page_num, page in enumerate(doc, start=1):
+        for drawing in page.get_drawings():
+            for item in drawing.get("items", []):
+                kind = item[0]
+                if kind == "re":                        # rectangle
+                    rect = item[1]
+                    if rect.width >= min_len or rect.height >= min_len:
+                        pages.add(page_num)
+                        break
+                elif kind == "l":                       # line segment
+                    p1, p2 = item[1], item[2]
+                    dx, dy = abs(p2.x - p1.x), abs(p2.y - p1.y)
+                    if (dy < 1 and dx >= min_len) or (dx < 1 and dy >= min_len):
+                        pages.add(page_num)
+                        break
+            if page_num in pages:
+                break
+    doc.close()
+    return pages
+
 
 def _clean_rows(raw: list[list]) -> list[list[str]]:
     return [
@@ -131,8 +165,12 @@ def _extract_pymupdf(path: Path, **_) -> list[ExtractedTable]:
 def _extract_camelot_lattice(path: Path, **_) -> list[ExtractedTable]:
     try:
         import camelot  # noqa: PLC0415
+        line_pages = _pages_with_drawn_lines(path)
+        if not line_pages:
+            return []
+        pages_str = ",".join(str(p) for p in sorted(line_pages))
         camelot_tables = camelot.read_pdf(
-            str(path), pages="all", flavor="lattice", suppress_stdout=True
+            str(path), pages=pages_str, flavor="lattice", suppress_stdout=True
         )
         tables: list[ExtractedTable] = []
         idx_per_page: dict[int, int] = {}
@@ -181,7 +219,7 @@ def _extract_img2table(path: Path, **_) -> list[ExtractedTable]:
         doc = fitz.open(str(path))
         for page_num, page in enumerate(doc, start=1):
             try:
-                pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0), alpha=False)
+                pix = page.get_pixmap(matrix=fitz.Matrix(_IMG2TABLE_ZOOM, _IMG2TABLE_ZOOM), alpha=False)
                 img_doc = I2TImage(src=pix.tobytes("png"))
                 extracted = img_doc.extract_tables()
                 for idx, tbl in enumerate(extracted):
