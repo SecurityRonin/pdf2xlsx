@@ -3,7 +3,10 @@ import time
 from pathlib import Path
 from collections import defaultdict
 from unittest.mock import patch, MagicMock
-from pdf2xlsx.extractor import extract_tables, _merge_continuation_tables, _select_best_per_page
+from pdf2xlsx.extractor import (
+    extract_tables, _merge_continuation_tables, _select_best_per_page,
+    _pages_with_drawn_lines, _IMG2TABLE_ZOOM,
+)
 from pdf2xlsx.models import ExtractedTable
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -268,4 +271,135 @@ def test_no_stuck_words_in_cells(general_ledger):
     ]
     assert stuck == [], (
         f"Found {len(stuck)} cell(s) with words stuck together, e.g. {stuck[0]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# img2table render zoom
+# ---------------------------------------------------------------------------
+
+def test_img2table_zoom_is_at_most_one():
+    """_IMG2TABLE_ZOOM must be ≤ 1.0 to avoid 4× memory/time overhead."""
+    assert _IMG2TABLE_ZOOM <= 1.0, (
+        f"_IMG2TABLE_ZOOM={_IMG2TABLE_ZOOM}; must be ≤1.0 (was 2.0, causing 4× slowdown)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# _pages_with_drawn_lines — line detection for camelot lattice gating
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def pdf_with_rect(tmp_path):
+    """Single-page PDF containing a drawn rectangle (simulated table border)."""
+    import fitz
+    doc = fitz.open()
+    page = doc.new_page()
+    page.draw_rect(fitz.Rect(50, 50, 300, 200), color=(0, 0, 0), width=1)
+    path = tmp_path / "with_rect.pdf"
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
+@pytest.fixture
+def pdf_with_hline(tmp_path):
+    """Single-page PDF containing a long horizontal drawn line."""
+    import fitz
+    doc = fitz.open()
+    page = doc.new_page()
+    page.draw_line(fitz.Point(50, 100), fitz.Point(350, 100), color=(0, 0, 0), width=1)
+    path = tmp_path / "with_line.pdf"
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
+@pytest.fixture
+def pdf_text_only(tmp_path):
+    """Single-page PDF with only text, no drawn lines."""
+    import fitz
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((50, 50), "Hello world\nNo lines here")
+    path = tmp_path / "text_only.pdf"
+    doc.save(str(path))
+    doc.close()
+    return path
+
+
+def test_pages_with_drawn_lines_detects_rect(pdf_with_rect):
+    """A page with a drawn rectangle must be returned."""
+    pages = _pages_with_drawn_lines(pdf_with_rect)
+    assert 1 in pages, f"Page 1 (has rect) must be in result, got {pages}"
+
+
+def test_pages_with_drawn_lines_detects_hline(pdf_with_hline):
+    """A page with a long horizontal line must be returned."""
+    pages = _pages_with_drawn_lines(pdf_with_hline)
+    assert 1 in pages, f"Page 1 (has h-line) must be in result, got {pages}"
+
+
+def test_pages_with_drawn_lines_empty_on_text_only(pdf_text_only):
+    """A text-only page with no drawn lines must not be returned."""
+    pages = _pages_with_drawn_lines(pdf_text_only)
+    assert 1 not in pages, f"Text-only page must not be detected as having lines, got {pages}"
+
+
+def test_pages_with_drawn_lines_multipage(tmp_path):
+    """Only pages with drawn lines should be returned; text-only pages excluded."""
+    import fitz
+    doc = fitz.open()
+    p1 = doc.new_page()
+    p1.insert_text((50, 50), "Text only")                              # page 1: no lines
+    p2 = doc.new_page()
+    p2.draw_rect(fitz.Rect(50, 50, 300, 200), color=(0, 0, 0), width=1)  # page 2: rect
+    p3 = doc.new_page()
+    p3.insert_text((50, 50), "Also text only")                          # page 3: no lines
+    path = tmp_path / "multi.pdf"
+    doc.save(str(path))
+    doc.close()
+    pages = _pages_with_drawn_lines(path)
+    assert pages == {2}, f"Expected only page 2, got {pages}"
+
+
+# ---------------------------------------------------------------------------
+# camelot lattice page filtering
+# ---------------------------------------------------------------------------
+
+def test_camelot_lattice_skips_all_when_no_lines(tmp_path):
+    """camelot_lattice must not call camelot.read_pdf when no pages have drawn lines."""
+    import fitz
+    doc = fitz.open()
+    doc.new_page().insert_text((50, 50), "No lines")
+    path = tmp_path / "nolines.pdf"
+    doc.save(str(path))
+    doc.close()
+
+    with patch('camelot.read_pdf') as mock_read:
+        from pdf2xlsx.extractor import _extract_camelot_lattice
+        result = _extract_camelot_lattice(path)
+    mock_read.assert_not_called(), "camelot.read_pdf must not be called on line-free PDF"
+    assert result == []
+
+
+def test_camelot_lattice_passes_only_line_pages(tmp_path):
+    """camelot_lattice must call camelot.read_pdf with only pages that have drawn lines."""
+    import fitz
+    doc = fitz.open()
+    doc.new_page().insert_text((50, 50), "Text only")                           # p1 no lines
+    doc.new_page().draw_rect(fitz.Rect(50,50,300,200), color=(0,0,0), width=1)  # p2 has rect
+    doc.new_page().insert_text((50, 50), "Text only")                           # p3 no lines
+    path = tmp_path / "filtered.pdf"
+    doc.save(str(path))
+    doc.close()
+
+    with patch('camelot.read_pdf', return_value=[]) as mock_read:
+        from pdf2xlsx.extractor import _extract_camelot_lattice
+        _extract_camelot_lattice(path)
+    mock_read.assert_called_once()
+    call_kwargs = mock_read.call_args
+    pages_arg = call_kwargs.kwargs.get('pages') or call_kwargs.args[1]
+    assert pages_arg == '2', (
+        f"camelot.read_pdf must be called with pages='2', got pages={pages_arg!r}"
     )
