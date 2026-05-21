@@ -5,7 +5,7 @@ from collections import defaultdict
 from unittest.mock import patch, MagicMock
 from pdf2xlsx.extractor import (
     extract_tables, _merge_continuation_tables, _select_best_per_page,
-    _pages_with_drawn_lines, _IMG2TABLE_ZOOM, _score_tables,
+    _pages_with_drawn_lines, _IMG2TABLE_ZOOM, _score_tables, _ENGINE_TIMEOUT,
 )
 from pdf2xlsx.models import ExtractedTable
 
@@ -468,6 +468,43 @@ def test_on_table_called_again_when_better_result_arrives(annual_report):
     assert any(t.source == "dense" for t in page1), (
         f"Dense engine result must appear in on_table calls; sources seen: {[t.source for t in page1]}"
     )
+
+
+def test_engine_timeout_does_not_block(annual_report):
+    """extract_tables must return even if one engine hangs indefinitely."""
+    import threading
+    import pdf2xlsx.extractor as extractor_mod
+
+    hang_event = threading.Event()
+
+    def hanging_engine(path, **kw):
+        hang_event.wait()  # blocks forever until event is set
+
+    fast_result = [ExtractedTable(page=1, index=0, rows=[["H", "V"], ["a", "1"]], source="fast")]
+
+    def fast_engine(path, **kw):
+        return fast_result
+
+    SHORT_TIMEOUT = 3  # seconds — enough to prove timeout works without slowing suite
+    margin = 5
+    deadline = SHORT_TIMEOUT + margin
+
+    t0 = time.monotonic()
+    with patch.object(extractor_mod, '_ENGINE_TIMEOUT', SHORT_TIMEOUT), \
+         patch('pdf2xlsx.extractor._extract_pdfplumber',      fast_engine), \
+         patch('pdf2xlsx.extractor._extract_pymupdf',         fast_engine), \
+         patch('pdf2xlsx.extractor._extract_camelot_lattice', fast_engine), \
+         patch('pdf2xlsx.extractor._extract_camelot_stream',  hanging_engine), \
+         patch('pdf2xlsx.extractor._extract_img2table',       fast_engine):
+        tables = extract_tables(annual_report)
+    elapsed = time.monotonic() - t0
+    hang_event.set()  # release stuck thread so it can exit cleanly
+
+    assert elapsed < deadline, (
+        f"extract_tables must complete within {deadline}s when one engine hangs; "
+        f"took {elapsed:.1f}s (short_timeout={SHORT_TIMEOUT}s, margin={margin}s)"
+    )
+    assert isinstance(tables, list), "Must still return a list when an engine times out"
 
 
 def test_camelot_lattice_passes_only_line_pages(tmp_path):
