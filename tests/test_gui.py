@@ -777,6 +777,122 @@ def test_pdf_panel_zoom_label_reflects_zoom(qtbot, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Keyboard navigation
+# ---------------------------------------------------------------------------
+
+def test_pdf_panel_right_arrow_advances_page(qtbot, tmp_path):
+    """Right arrow key must advance to the next page."""
+    from pdf2xlsx.gui.pdf_panel import PdfPanel
+    dst = str(tmp_path / "key1.pdf")
+    shutil.copy(FIXTURES / "annual_report.pdf", dst)
+    panel = PdfPanel()
+    qtbot.addWidget(panel)
+    panel.show()
+    panel.load_pdf(dst)
+    assert panel.current_page == 0
+    qtbot.keyClick(panel, Qt.Key.Key_Right)
+    assert panel.current_page == 1, (
+        f"Right arrow must advance page; got {panel.current_page}"
+    )
+
+
+def test_pdf_panel_left_arrow_goes_back(qtbot, tmp_path):
+    """Left arrow key from page 2 must return to page 1."""
+    from pdf2xlsx.gui.pdf_panel import PdfPanel
+    dst = str(tmp_path / "key2.pdf")
+    shutil.copy(FIXTURES / "annual_report.pdf", dst)
+    panel = PdfPanel()
+    qtbot.addWidget(panel)
+    panel.show()
+    panel.load_pdf(dst)
+    panel.go_to_page(2)
+    qtbot.keyClick(panel, Qt.Key.Key_Left)
+    assert panel.current_page == 0, (
+        f"Left arrow must go back; got {panel.current_page}"
+    )
+
+
+def test_pdf_panel_pagedown_advances_page(qtbot, tmp_path):
+    """Page Down key must advance to the next page."""
+    from pdf2xlsx.gui.pdf_panel import PdfPanel
+    dst = str(tmp_path / "key3.pdf")
+    shutil.copy(FIXTURES / "annual_report.pdf", dst)
+    panel = PdfPanel()
+    qtbot.addWidget(panel)
+    panel.show()
+    panel.load_pdf(dst)
+    qtbot.keyClick(panel, Qt.Key.Key_PageDown)
+    assert panel.current_page == 1, (
+        f"PageDown must advance page; got {panel.current_page}"
+    )
+
+
+def test_pdf_panel_pageup_goes_back(qtbot, tmp_path):
+    """Page Up key from page 2 must return to page 1."""
+    from pdf2xlsx.gui.pdf_panel import PdfPanel
+    dst = str(tmp_path / "key4.pdf")
+    shutil.copy(FIXTURES / "annual_report.pdf", dst)
+    panel = PdfPanel()
+    qtbot.addWidget(panel)
+    panel.show()
+    panel.load_pdf(dst)
+    panel.go_to_page(2)
+    qtbot.keyClick(panel, Qt.Key.Key_PageUp)
+    assert panel.current_page == 0, (
+        f"PageUp must go back; got {panel.current_page}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Progress bar — determinate 0-100%
+# ---------------------------------------------------------------------------
+
+def test_progress_bar_is_determinate_during_conversion(qtbot, tmp_path):
+    """Progress bar must switch to a 0-100 range (not indeterminate) during conversion."""
+    from pdf2xlsx.gui.main_window import MainWindow
+    dst = str(tmp_path / "prog2.pdf")
+    shutil.copy(FIXTURES / "term_sheet.pdf", dst)
+    win = MainWindow()
+    qtbot.addWidget(win)
+
+    import threading
+    barrier = threading.Event()
+
+    def slow_extract(path, on_table=None, on_progress=None):
+        barrier.wait(timeout=3)
+        from pdf2xlsx.models import ExtractedTable
+        return [ExtractedTable(page=1, index=0, rows=[["X"]], source="pdfplumber")]
+
+    with mock.patch("pdf2xlsx.extractor.extract_tables", side_effect=slow_extract):
+        win._load_pdf(dst)
+        assert win.progress_bar.maximum() == 100, (
+            f"Progress bar must have range 0-100 during conversion, "
+            f"got maximum={win.progress_bar.maximum()}"
+        )
+        barrier.set()
+        qtbot.waitUntil(lambda: not win._thread.isRunning(), timeout=5000)
+
+
+def test_progress_bar_reaches_100_on_completion(qtbot, tmp_path):
+    """Progress bar must be at 100% after conversion finishes."""
+    from pdf2xlsx.gui.main_window import MainWindow
+    from pdf2xlsx.models import ExtractedTable
+    dst = str(tmp_path / "prog3.pdf")
+    shutil.copy(FIXTURES / "term_sheet.pdf", dst)
+    win = MainWindow()
+    qtbot.addWidget(win)
+
+    fake = [ExtractedTable(page=1, index=0, rows=[["A", "B"], ["1", "2"]], source="pdfplumber")]
+    with mock.patch("pdf2xlsx.extractor.extract_tables", return_value=fake):
+        win._load_pdf(dst)
+        qtbot.waitUntil(lambda: win.btn_save.isEnabled(), timeout=5000)
+
+    assert win.progress_bar.value() == 100, (
+        f"Progress bar must be 100% after conversion; got {win.progress_bar.value()}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # App module
 # ---------------------------------------------------------------------------
 
