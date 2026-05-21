@@ -285,15 +285,39 @@ def _merge_continuation_tables(tables: list[ExtractedTable]) -> list[ExtractedTa
     return result
 
 
+def _is_stuck_word(cell: str) -> bool:
+    """True when a cell looks like words concatenated without spaces."""
+    s = cell.strip()
+    return (
+        len(s) > 20
+        and ' ' not in s
+        and any(c.isupper() for c in s[1:])
+        and not s.startswith('$')
+        and not s.replace(',', '').replace('.', '').replace('-', '').isnumeric()
+    )
+
+
 def _score_tables(tables: list[ExtractedTable]) -> float:
-    """Score a set of tables for a page: more non-empty cells + more rows = better."""
+    """
+    Score a set of tables for a page.
+
+    +1  per non-empty cell
+    +0.5 per row (rewards properly split rows over large merged cells)
+    -10  per stuck-word cell (words concatenated without spaces = bad engine output)
+    """
     if not tables:
         return 0.0
-    non_empty = sum(
-        1 for t in tables for row in t.rows for cell in row if str(cell).strip()
-    )
-    row_count = sum(len(t.rows) for t in tables)
-    return non_empty + row_count * 0.5
+    score = 0.0
+    for t in tables:
+        score += len(t.rows) * 0.5
+        for row in t.rows:
+            for cell in row:
+                s = str(cell).strip()
+                if s:
+                    score += 1.0
+                    if _is_stuck_word(s):
+                        score -= 10.0
+    return score
 
 
 def _select_best_per_page(
