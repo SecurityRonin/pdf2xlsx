@@ -613,7 +613,7 @@ def test_worker_emits_table_found_per_table(qtbot, tmp_path):
     found = []
     all_tables = [fake1, fake2]
 
-    def fake_extract(path, on_table=None):
+    def fake_extract(path, on_table=None, on_progress=None):
         for t in all_tables:
             if on_table:
                 on_table(t)

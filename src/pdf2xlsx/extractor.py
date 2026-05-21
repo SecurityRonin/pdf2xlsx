@@ -72,10 +72,13 @@ def _two_pass_expand(page, finders) -> list[list] | None:
     return None
 
 
-def _extract_pdfplumber(path: Path) -> list[ExtractedTable]:
+def _extract_pdfplumber(path: Path, on_progress=None) -> list[ExtractedTable]:
     tables: list[ExtractedTable] = []
     with pdfplumber.open(path) as pdf:
+        total = len(pdf.pages)
         for page_num, page in enumerate(pdf.pages, start=1):
+            if on_progress:
+                on_progress(page_num, total)
             # text_x_tolerance=2 detects word spaces as narrow as 2 pts.
             # Some PDFs (e.g. TimesNewRoman at small sizes) encode word gaps
             # of ~2.7 pts which pdfplumber's default of 3 pts misses entirely.
@@ -199,12 +202,13 @@ def _deduplicate(
 def extract_tables(
     path: Path,
     on_table: Callable[[ExtractedTable], None] | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> list[ExtractedTable]:
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"PDF not found: {path}")
 
-    primary = _merge_continuation_tables(_extract_pdfplumber(path))
+    primary = _merge_continuation_tables(_extract_pdfplumber(path, on_progress=on_progress))
     secondary = _merge_continuation_tables(_extract_pymupdf(path))
     merged = _deduplicate(primary, secondary)
     result = [t for t in merged if not t.is_empty]

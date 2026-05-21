@@ -11,6 +11,7 @@ from pdf2xlsx.gui.xlsx_panel import XlsxPanel
 
 class _ConversionWorker(QObject):
     table_found = Signal(object)   # emitted per table as extraction progresses
+    progress = Signal(int, int)    # (current_page, total_pages) during pdfplumber pass
     finished = Signal(list)
     error = Signal(str)
 
@@ -21,7 +22,11 @@ class _ConversionWorker(QObject):
     def run(self):
         from pdf2xlsx.extractor import extract_tables
         try:
-            tables = extract_tables(Path(self._path), on_table=self.table_found.emit)
+            tables = extract_tables(
+                Path(self._path),
+                on_table=self.table_found.emit,
+                on_progress=self.progress.emit,
+            )
             self.finished.emit(tables)
         except Exception as exc:
             self.error.emit(str(exc))
@@ -110,6 +115,8 @@ class MainWindow(QMainWindow):
             self._thread.quit()
             self._thread.wait()
 
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
         self.progress_bar.setVisible(True)
         self.btn_convert.setEnabled(False)
         self.btn_save.setEnabled(False)
@@ -120,11 +127,16 @@ class MainWindow(QMainWindow):
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.table_found.connect(self.xlsx_panel.add_table)
+        self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_conversion_done)
         self._worker.error.connect(self._on_conversion_error)
         self._worker.finished.connect(self._thread.quit)
         self._worker.error.connect(self._thread.quit)
         self._thread.start()
+
+    def _on_progress(self, current: int, total: int):
+        if total > 0:
+            self.progress_bar.setValue(int(current / total * 100))
 
     def _on_conversion_done(self, tables):
         self._tables = tables
@@ -134,6 +146,7 @@ class MainWindow(QMainWindow):
             self.xlsx_panel.load_tables(tables)
         self.btn_convert.setEnabled(True)
         self.btn_save.setEnabled(True)
+        self.progress_bar.setValue(100)
         self.progress_bar.setVisible(False)
         self.statusBar().showMessage(f"Extracted {len(tables)} table(s)")
 

@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QSpinBox, QSplitter, QToolButton,
 )
 from PySide6.QtGui import QPixmap, QImage, QIcon
-from PySide6.QtCore import Qt, Signal, QSize, QTimer
+from PySide6.QtCore import Qt, Signal, QSize, QTimer, QEvent
 
 
 _THUMB_ZOOM = 0.22   # renders ~135×174 px for letter — comfortably shows 3-digit labels
@@ -45,6 +45,55 @@ class PdfPanel(QWidget):
         self.lbl_zoom.setText(self._zoom_text())
         self._render()
 
+    def _fit_page_zoom(self):
+        """Compute zoom so the current page fills the viewport without scrollbars."""
+        try:
+            if not self._doc:
+                return
+            rect = self._doc[self.current_page].rect
+            vp = self.scroll.viewport()
+        except RuntimeError:
+            return  # widget deleted before timer fired
+        vp_w = vp.width() or 470   # fallback for headless/pre-show
+        vp_h = vp.height() or 680
+        zoom_w = vp_w / rect.width
+        zoom_h = vp_h / rect.height
+        self._zoom = round(min(zoom_w, zoom_h) * 0.97, 2)  # 3% breathing room
+        self._zoom = max(self._ZOOM_MIN, min(self._ZOOM_MAX, self._zoom))
+        self.lbl_zoom.setText(self._zoom_text())
+        self._render()
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        if key in (Qt.Key.Key_Right, Qt.Key.Key_Down, Qt.Key.Key_PageDown):
+            self._next_page()
+        elif key in (Qt.Key.Key_Left, Qt.Key.Key_Up, Qt.Key.Key_PageUp):
+            self._prev_page()
+        else:
+            super().keyPressEvent(event)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            if obj is self.thumb_list:
+                # Let Up/Down drive thumbnail row selection (Qt built-in);
+                # intercept PgUp/PgDn and Left/Right for page navigation.
+                if key in (Qt.Key.Key_Right, Qt.Key.Key_PageDown):
+                    self._next_page()
+                    return True
+                elif key in (Qt.Key.Key_Left, Qt.Key.Key_PageUp):
+                    self._prev_page()
+                    return True
+            else:
+                # PDF scroll area: intercept all nav keys
+                if key in (Qt.Key.Key_Right, Qt.Key.Key_PageDown):
+                    self._next_page()
+                    return True
+                elif key in (Qt.Key.Key_Left, Qt.Key.Key_PageUp):
+                    self._prev_page()
+                    return True
+        return super().eventFilter(obj, event)
+
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
@@ -67,6 +116,8 @@ class PdfPanel(QWidget):
         self.thumb_list.setSpacing(4)
         self.thumb_list.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.thumb_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.thumb_list.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.thumb_list.installEventFilter(self)
         self.thumb_list.currentRowChanged.connect(self._on_thumb_row_changed)
         splitter.addWidget(self.thumb_list)
 
@@ -76,23 +127,8 @@ class PdfPanel(QWidget):
         right.setContentsMargins(0, 0, 0, 0)
 
         nav = QHBoxLayout()
-        self.btn_prev = QPushButton("◀ Prev")
-        self.btn_prev.clicked.connect(self._prev_page)
-        self.btn_prev.setEnabled(False)
 
-        self.spin_page = QSpinBox()
-        self.spin_page.setMinimum(1)
-        self.spin_page.setMaximum(1)
-        self.spin_page.setEnabled(False)
-        self.spin_page.valueChanged.connect(self._on_spin_changed)
-
-        self.lbl_total = QLabel("/ 0")
-        self.lbl_total.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-
-        self.btn_next = QPushButton("Next ▶")
-        self.btn_next.clicked.connect(self._next_page)
-        self.btn_next.setEnabled(False)
-
+        # Zoom cluster — left
         self.btn_zoom_out = QPushButton("−")
         self.btn_zoom_out.setFixedWidth(28)
         self.btn_zoom_out.clicked.connect(self._zoom_out)
@@ -105,19 +141,42 @@ class PdfPanel(QWidget):
         self.btn_zoom_in.setFixedWidth(28)
         self.btn_zoom_in.clicked.connect(self._zoom_in)
 
-        nav.addWidget(self.btn_prev)
-        nav.addStretch(1)
-        nav.addWidget(self.spin_page)
-        nav.addWidget(self.lbl_total)
-        nav.addStretch(1)
+        # Page navigation cluster — center
+        self.btn_prev = QPushButton("◀")
+        self.btn_prev.setFixedWidth(32)
+        self.btn_prev.clicked.connect(self._prev_page)
+        self.btn_prev.setEnabled(False)
+
+        self.spin_page = QSpinBox()
+        self.spin_page.setMinimum(1)
+        self.spin_page.setMaximum(1)
+        self.spin_page.setEnabled(False)
+        self.spin_page.valueChanged.connect(self._on_spin_changed)
+
+        self.lbl_total = QLabel("/ 0")
+        self.lbl_total.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        self.btn_next = QPushButton("▶")
+        self.btn_next.setFixedWidth(32)
+        self.btn_next.clicked.connect(self._next_page)
+        self.btn_next.setEnabled(False)
+
         nav.addWidget(self.btn_zoom_out)
         nav.addWidget(self.lbl_zoom)
         nav.addWidget(self.btn_zoom_in)
+        nav.addStretch(1)
+        nav.addWidget(self.btn_prev)
+        nav.addWidget(self.spin_page)
+        nav.addWidget(self.lbl_total)
         nav.addWidget(self.btn_next)
+        nav.addStretch(1)
         right.addLayout(nav)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
+        self.scroll.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.scroll.installEventFilter(self)
+        self.scroll.viewport().installEventFilter(self)
         self.lbl_img = QLabel()
         self.lbl_img.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_img.setSizePolicy(
@@ -163,7 +222,8 @@ class PdfPanel(QWidget):
         self.current_page = 0
         self._load_thumbnails()
         self._update_spinbox()
-        self._render()
+        self._render()  # immediate render at current zoom so buttons/signals fire
+        QTimer.singleShot(0, self._fit_page_zoom)  # then refit once laid out
 
     def _load_thumbnails(self):
         """Populate the list with placeholders immediately; render lazily via timer."""
