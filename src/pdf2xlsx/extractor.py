@@ -1,4 +1,7 @@
+import json
 import re
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable
@@ -11,9 +14,28 @@ _YEAR_RE = re.compile(r'^20\d\d$')
 _LARGE_NUM_RE = re.compile(r'^[\d,]{4,}$')   # comma-formatted numbers ≥4 digits
 _STUCK_SPLIT_RE = re.compile(r'([a-z.,;:()])([A-Z])')  # split at camelCase or punct+uppercase
 
-_IMG2TABLE_ZOOM  = 1.0        # render zoom for img2table; 1.0 avoids 4× memory/time of 2.0
-_LINE_MIN_LEN    = 20.0       # pt — minimum h/v line length to count as a table border
-_ENGINE_TIMEOUT  = 120        # seconds — per-engine wall-clock budget; camelot can hang
+_IMG2TABLE_ZOOM          = 1.0   # render zoom for img2table; 1.0 avoids 4× memory/time of 2.0
+_LINE_MIN_LEN            = 20.0  # pt — minimum h/v line length to count as a table border
+_ENGINE_TIMEOUT          = 120   # seconds — thread-level safety net for all engines
+_CAMELOT_STREAM_TIMEOUT  = 60    # seconds — subprocess kill timeout for camelot stream only
+
+# Script run in a child process to isolate camelot stream (Ghostscript can hang indefinitely)
+_CAMELOT_STREAM_SCRIPT = """\
+import sys, json
+try:
+    import camelot
+    ts = camelot.read_pdf(sys.argv[1], pages="all", flavor="stream", suppress_stdout=True)
+    out = []
+    for t in ts:
+        try:
+            rows = t.df.fillna("").values.tolist()
+        except Exception:
+            rows = [[str(v) for v in row] for row in t.df.itertuples(index=False)]
+        out.append({"p": t.page, "r": rows})
+    print(json.dumps(out))
+except Exception:
+    print("[]")
+"""
 
 
 def _pages_with_drawn_lines(path: Path, min_len: float = _LINE_MIN_LEN) -> set[int]:
@@ -201,26 +223,40 @@ def _extract_camelot_lattice(path: Path, **_) -> list[ExtractedTable]:
 
 
 def _extract_camelot_stream(path: Path, **_) -> list[ExtractedTable]:
+    """Run camelot stream flavor in a subprocess so the OS can kill it on timeout.
+
+    camelot/Ghostscript can hang indefinitely on some PDFs; running in a child
+    process gives us subprocess.TimeoutExpired + SIGKILL, unlike thread-based
+    timeout which leaves zombie threads that cannot be forcibly stopped.
+    """
     try:
-        import camelot  # noqa: PLC0415
-        camelot_tables = camelot.read_pdf(
-            str(path), pages="all", flavor="stream", suppress_stdout=True
-        )
-        tables: list[ExtractedTable] = []
-        idx_per_page: dict[int, int] = {}
-        for ct in camelot_tables:
-            page_num = ct.page
-            rows = ct.df.values.tolist()
-            cleaned = postprocess_rows(_clean_rows(rows))
-            if _is_meaningful_table(cleaned):
-                idx = idx_per_page.get(page_num, 0)
-                tables.append(ExtractedTable(
-                    page=page_num, index=idx, rows=cleaned, source="camelot_stream"
-                ))
-                idx_per_page[page_num] = idx + 1
-        return _merge_continuation_tables(tables)
-    except Exception:
+        import camelot  # noqa: PLC0415 — fast availability check before subprocess spawn
+    except ImportError:
         return []
+    try:
+        proc = subprocess.run(
+            [sys.executable, '-c', _CAMELOT_STREAM_SCRIPT, str(path)],
+            capture_output=True,
+            text=True,
+            timeout=_CAMELOT_STREAM_TIMEOUT,
+        )
+        raw: list[dict] = json.loads(proc.stdout or "[]")
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception):
+        return []
+
+    tables: list[ExtractedTable] = []
+    idx_per_page: dict[int, int] = {}
+    for item in raw:
+        page_num = item["p"]
+        rows = item["r"]
+        cleaned = postprocess_rows(_clean_rows(rows))
+        if _is_meaningful_table(cleaned):
+            idx = idx_per_page.get(page_num, 0)
+            tables.append(ExtractedTable(
+                page=page_num, index=idx, rows=cleaned, source="camelot_stream"
+            ))
+            idx_per_page[page_num] = idx + 1
+    return _merge_continuation_tables(tables)
 
 
 def _extract_img2table(path: Path, **_) -> list[ExtractedTable]:
