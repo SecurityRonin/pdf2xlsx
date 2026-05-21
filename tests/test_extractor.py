@@ -405,6 +405,7 @@ def test_pages_with_drawn_lines_multipage(tmp_path):
 
 def test_camelot_lattice_skips_all_when_no_lines(tmp_path):
     """camelot_lattice must not call camelot.read_pdf when no pages have drawn lines."""
+    pytest.importorskip("camelot", reason="camelot not installed")
     import fitz
     doc = fitz.open()
     doc.new_page().insert_text((50, 50), "No lines")
@@ -509,6 +510,7 @@ def test_engine_timeout_does_not_block(annual_report):
 
 def test_camelot_lattice_passes_only_line_pages(tmp_path):
     """camelot_lattice must call camelot.read_pdf with only pages that have drawn lines."""
+    pytest.importorskip("camelot", reason="camelot not installed")
     import fitz
     doc = fitz.open()
     doc.new_page().insert_text((50, 50), "Text only")                           # p1 no lines
