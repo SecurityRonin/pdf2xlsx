@@ -1,4 +1,5 @@
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable
 import pdfplumber
@@ -20,10 +21,8 @@ def _clean_rows(raw: list[list]) -> list[list[str]]:
 def _is_meaningful_table(rows: list[list[str]]) -> bool:
     if len(rows) < 2:
         return False
-    # Need at least 2 columns
     if not rows or max(len(r) for r in rows) < 2:
         return False
-    # Header row must not be entirely empty
     if rows:
         non_empty_header = [c for c in rows[0] if c.strip()]
         if not non_empty_header:
@@ -35,12 +34,8 @@ def _two_pass_expand(page, finders) -> list[list] | None:
     """
     Re-extract using the bordered tables' column x-positions as explicit vertical
     guides, expanding the search region ±80pt to recover surrounding unbordered rows.
-
-    Returns raw rows if the result has more rows than the bordered tables alone,
-    otherwise None (fall back to line-based output).
     """
     try:
-        # Derive column boundary x-positions from all detected cell bboxes
         xs: set[float] = set()
         for tf in finders:
             for (x0, _y0, x1, _y1) in tf.cells:
@@ -79,14 +74,10 @@ def _extract_pdfplumber(path: Path, on_progress=None) -> list[ExtractedTable]:
         for page_num, page in enumerate(pdf.pages, start=1):
             if on_progress:
                 on_progress(page_num, total)
-            # text_x_tolerance=2 detects word spaces as narrow as 2 pts.
-            # Some PDFs (e.g. TimesNewRoman at small sizes) encode word gaps
-            # of ~2.7 pts which pdfplumber's default of 3 pts misses entirely.
             settings = {"text_x_tolerance": 2}
             finders = page.find_tables(table_settings=settings)
 
             if finders:
-                # Try two-pass: use bordered column structure to recover unbordered rows
                 extended = _two_pass_expand(page, finders)
                 if extended:
                     page_tables = [extended]
@@ -111,7 +102,7 @@ def _extract_pdfplumber(path: Path, on_progress=None) -> list[ExtractedTable]:
     return tables
 
 
-def _extract_pymupdf(path: Path) -> list[ExtractedTable]:
+def _extract_pymupdf(path: Path, **_) -> list[ExtractedTable]:
     tables: list[ExtractedTable] = []
     doc = fitz.open(str(path))
     for page_num, page in enumerate(doc, start=1):
@@ -137,6 +128,83 @@ def _extract_pymupdf(path: Path) -> list[ExtractedTable]:
     return tables
 
 
+def _extract_camelot_lattice(path: Path, **_) -> list[ExtractedTable]:
+    try:
+        import camelot  # noqa: PLC0415
+        camelot_tables = camelot.read_pdf(
+            str(path), pages="all", flavor="lattice", suppress_stdout=True
+        )
+        tables: list[ExtractedTable] = []
+        idx_per_page: dict[int, int] = {}
+        for ct in camelot_tables:
+            page_num = ct.page
+            rows = ct.df.values.tolist()
+            cleaned = postprocess_rows(_clean_rows(rows))
+            if _is_meaningful_table(cleaned):
+                idx = idx_per_page.get(page_num, 0)
+                tables.append(ExtractedTable(
+                    page=page_num, index=idx, rows=cleaned, source="camelot_lattice"
+                ))
+                idx_per_page[page_num] = idx + 1
+        return _merge_continuation_tables(tables)
+    except Exception:
+        return []
+
+
+def _extract_camelot_stream(path: Path, **_) -> list[ExtractedTable]:
+    try:
+        import camelot  # noqa: PLC0415
+        camelot_tables = camelot.read_pdf(
+            str(path), pages="all", flavor="stream", suppress_stdout=True
+        )
+        tables: list[ExtractedTable] = []
+        idx_per_page: dict[int, int] = {}
+        for ct in camelot_tables:
+            page_num = ct.page
+            rows = ct.df.values.tolist()
+            cleaned = postprocess_rows(_clean_rows(rows))
+            if _is_meaningful_table(cleaned):
+                idx = idx_per_page.get(page_num, 0)
+                tables.append(ExtractedTable(
+                    page=page_num, index=idx, rows=cleaned, source="camelot_stream"
+                ))
+                idx_per_page[page_num] = idx + 1
+        return _merge_continuation_tables(tables)
+    except Exception:
+        return []
+
+
+def _extract_img2table(path: Path, **_) -> list[ExtractedTable]:
+    try:
+        from img2table.document import Image as I2TImage  # noqa: PLC0415
+        tables: list[ExtractedTable] = []
+        doc = fitz.open(str(path))
+        for page_num, page in enumerate(doc, start=1):
+            try:
+                pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0), alpha=False)
+                img_doc = I2TImage(src=pix.tobytes("png"))
+                extracted = img_doc.extract_tables()
+                for idx, tbl in enumerate(extracted):
+                    try:
+                        rows = tbl.df.fillna("").values.tolist()
+                    except Exception:
+                        rows = [
+                            [str(cell.value or "") for cell in cells]
+                            for cells in tbl.content.values()
+                        ]
+                    cleaned = postprocess_rows(_clean_rows(rows))
+                    if _is_meaningful_table(cleaned):
+                        tables.append(ExtractedTable(
+                            page=page_num, index=idx, rows=cleaned, source="img2table"
+                        ))
+            except Exception:
+                continue
+        doc.close()
+        return _merge_continuation_tables(tables)
+    except Exception:
+        return []
+
+
 def _row_is_data(row: list[str]) -> bool:
     """True when a row contains financial data (year or large number) — not a header."""
     cells = [c.strip() for c in row if c.strip()]
@@ -150,12 +218,6 @@ def _merge_continuation_tables(tables: list[ExtractedTable]) -> list[ExtractedTa
     """
     Merge consecutive same-page sub-tables that pdfplumber splits at row-group
     boundaries (e.g. one sub-table per executive in a compensation table).
-
-    Two consecutive tables are merged when:
-    - Same page and same source
-    - Same column count
-    - The second table's first row is a data row (contains a year or large number),
-      not an all-text column-header row indicating a genuinely new table.
     """
     if not tables:
         return tables
@@ -185,18 +247,47 @@ def _merge_continuation_tables(tables: list[ExtractedTable]) -> list[ExtractedTa
     return result
 
 
-def _deduplicate(
-    primary: list[ExtractedTable],
-    secondary: list[ExtractedTable],
+def _score_tables(tables: list[ExtractedTable]) -> float:
+    """Score a set of tables for a page: more non-empty cells + more rows = better."""
+    if not tables:
+        return 0.0
+    non_empty = sum(
+        1 for t in tables for row in t.rows for cell in row if str(cell).strip()
+    )
+    row_count = sum(len(t.rows) for t in tables)
+    return non_empty + row_count * 0.5
+
+
+def _select_best_per_page(
+    results: dict[str, list[ExtractedTable]],
 ) -> list[ExtractedTable]:
-    """Use primary results; supplement with secondary on pages primary missed."""
-    primary_pages = {t.page for t in primary}
-    extras = [t for t in secondary if t.page not in primary_pages]
-    # Re-index extras so indices are sequential from 0
-    result = list(primary)
-    for t in extras:
-        result.append(t)
-    return result
+    """
+    For each page, pick the engine whose table set has the highest score
+    (most non-empty cells, tie-broken by row count). Each page is decided
+    independently so the best engine can differ per page.
+    """
+    all_pages: set[int] = set()
+    for tables in results.values():
+        for t in tables:
+            all_pages.add(t.page)
+
+    output: list[ExtractedTable] = []
+    for page in sorted(all_pages):
+        page_results = {
+            engine: [t for t in tables if t.page == page]
+            for engine, tables in results.items()
+            if any(t.page == page for t in tables)
+        }
+        if not page_results:
+            continue
+
+        best_engine = max(page_results, key=lambda e: _score_tables(page_results[e]))
+        for idx, t in enumerate(page_results[best_engine]):
+            output.append(ExtractedTable(
+                page=t.page, index=idx, rows=t.rows, source=t.source,
+            ))
+
+    return output
 
 
 def extract_tables(
@@ -208,9 +299,26 @@ def extract_tables(
     if not path.exists():
         raise FileNotFoundError(f"PDF not found: {path}")
 
-    primary = _merge_continuation_tables(_extract_pdfplumber(path, on_progress=on_progress))
-    secondary = _merge_continuation_tables(_extract_pymupdf(path))
-    merged = _deduplicate(primary, secondary)
+    engine_fns: dict[str, Callable] = {
+        "pdfplumber":      lambda: _merge_continuation_tables(
+                               _extract_pdfplumber(path, on_progress=on_progress)),
+        "pymupdf":         lambda: _extract_pymupdf(path),
+        "camelot_lattice": lambda: _extract_camelot_lattice(path),
+        "camelot_stream":  lambda: _extract_camelot_stream(path),
+        "img2table":       lambda: _extract_img2table(path),
+    }
+
+    engine_results: dict[str, list[ExtractedTable]] = {}
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(fn): name for name, fn in engine_fns.items()}
+        for future in as_completed(futures):
+            name = futures[future]
+            try:
+                engine_results[name] = future.result()
+            except Exception:
+                engine_results[name] = []
+
+    merged = _select_best_per_page(engine_results)
     result = [t for t in merged if not t.is_empty]
     if on_table:
         for t in result:

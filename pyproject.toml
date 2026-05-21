@@ -10,6 +10,8 @@ dependencies = [
     "typer>=0.12",
     "rich>=13.0",
     "PySide6>=6.7",
+    "camelot-py[cv]>=1.0.9",
+    "img2table>=2.0.0",
 ]
 
 [project.scripts]

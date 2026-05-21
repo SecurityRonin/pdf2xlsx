@@ -40,7 +40,7 @@ class XlsxPanel(QWidget):
         layout.addWidget(self.stack, 1)
 
     def _combo_label(self, table) -> str:
-        return f"p.{table.page} · {table.sheet_name}"
+        return f"p.{table.page} · {table.sheet_name}  [{table.source}]"
 
     def load_tables(self, tables):
         self._tables = list(tables)
