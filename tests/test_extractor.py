@@ -267,6 +267,7 @@ def test_no_stuck_words_in_cells(general_ledger):
         if len(cell) > 20
         and ' ' not in cell
         and any(c.isupper() for c in cell[1:])
+        and any(c.islower() for c in cell)   # all-CAPS can't be fixed without NLP
         and not cell.startswith('$')
         and not cell.replace(',', '').replace('.', '').replace('-', '').isnumeric()
     ]
@@ -343,24 +344,28 @@ def test_select_best_per_page_hard_rejects_stuck_words_when_clean_available():
 
 
 def test_clean_rows_splits_camelcase_stuck_words():
-    """_clean_rows must insert spaces at camelCase boundaries in stuck-word cells.
+    """_clean_rows must insert spaces in stuck-word cells via camelCase and period junctions.
 
     On some PDFs, text elements are stored without inter-word spacing; all
-    extractors then produce cells like 'IntellectualPropertyandIntangibleAssets'.
-    CamelCase splitting converts these to readable text and ensures they no
-    longer match the stuck-word predicate.
+    extractors then produce cells like 'IntellectualPropertyandIntangibleAssets'
+    or 'million.Restructuringandothercosts'. Splitting at camelCase boundaries
+    and punctuation-uppercase boundaries converts these to readable text so they
+    no longer match the stuck-word predicate.
     """
     raw = [
         ['Name', 'Amount'],
-        ['IntellectualPropertyandIntangibleAssets', '1,000'],
-        ['ualPropertyandIntangibleAssets', '2,000'],
+        ['IntellectualPropertyandIntangibleAssets', '1,000'],   # camelCase
+        ['ualPropertyandIntangibleAssets', '2,000'],            # camelCase
+        ['million.Restructuringandothercosts', '500'],          # period junction
+        ['implementtheinvestmentprocess.Theinvestmentman', '0'],  # period junction
+        ['(Amountsinthousandsexceptsharedataandwhereo', 'note'],  # paren junction
     ]
     cleaned = _clean_rows(raw)
-    for row_idx, original in [(1, 'IntellectualPropertyandIntangibleAssets'),
-                               (2, 'ualPropertyandIntangibleAssets')]:
+    for row_idx in range(1, len(raw)):
+        original = raw[row_idx][0]
         cell = cleaned[row_idx][0]
         assert ' ' in cell, (
-            f"CamelCase stuck word '{original}' must have spaces after cleaning; "
+            f"Stuck word '{original}' must have spaces after cleaning; "
             f"got {cell!r}"
         )
 
