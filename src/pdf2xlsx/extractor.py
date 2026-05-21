@@ -321,13 +321,25 @@ def _score_tables(tables: list[ExtractedTable]) -> float:
     return score
 
 
+def _has_stuck_words(tables: list[ExtractedTable]) -> bool:
+    return any(
+        _is_stuck_word(cell)
+        for t in tables
+        for row in t.rows
+        for cell in row
+    )
+
+
 def _select_best_per_page(
     results: dict[str, list[ExtractedTable]],
 ) -> list[ExtractedTable]:
     """
-    For each page, pick the engine whose table set has the highest score
-    (most non-empty cells, tie-broken by row count). Each page is decided
-    independently so the best engine can differ per page.
+    For each page, pick the engine whose table set has the highest score.
+
+    Two-tier selection:
+    1. Hard-reject engines with any stuck-word cells (concatenated words = bad parse).
+    2. Among surviving engines, pick the one with the highest _score_tables.
+    Fall back to the full candidate set only when every engine produces stuck words.
     """
     all_pages: set[int] = set()
     for tables in results.values():
@@ -344,8 +356,11 @@ def _select_best_per_page(
         if not page_results:
             continue
 
-        best_engine = max(page_results, key=lambda e: _score_tables(page_results[e]))
-        for idx, t in enumerate(page_results[best_engine]):
+        clean = {e: tbls for e, tbls in page_results.items() if not _has_stuck_words(tbls)}
+        candidates = clean if clean else page_results
+
+        best_engine = max(candidates, key=lambda e: _score_tables(candidates[e]))
+        for idx, t in enumerate(candidates[best_engine]):
             output.append(ExtractedTable(
                 page=t.page, index=idx, rows=t.rows, source=t.source,
             ))
