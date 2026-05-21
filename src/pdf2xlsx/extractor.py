@@ -9,6 +9,7 @@ from pdf2xlsx.postprocess import postprocess_rows
 
 _YEAR_RE = re.compile(r'^20\d\d$')
 _LARGE_NUM_RE = re.compile(r'^[\d,]{4,}$')   # comma-formatted numbers ≥4 digits
+_CAMEL_SPLIT_RE = re.compile(r'([a-z])([A-Z])')  # split "wordWord" → "word Word"
 
 _IMG2TABLE_ZOOM  = 1.0        # render zoom for img2table; 1.0 avoids 4× memory/time of 2.0
 _LINE_MIN_LEN    = 20.0       # pt — minimum h/v line length to count as a table border
@@ -47,10 +48,19 @@ def _pages_with_drawn_lines(path: Path, min_len: float = _LINE_MIN_LEN) -> set[i
 
 
 def _clean_rows(raw: list[list]) -> list[list[str]]:
-    return [
-        [str(cell).strip() if cell is not None else "" for cell in row]
-        for row in raw
-    ]
+    rows = []
+    for row in raw:
+        cleaned = []
+        for cell in row:
+            s = str(cell).strip() if cell is not None else ""
+            # For stuck-word cells, insert spaces at camelCase boundaries.
+            # _is_stuck_word is defined later in this module but resolved at
+            # call time, not definition time — safe to reference here.
+            if _is_stuck_word(s):
+                s = _CAMEL_SPLIT_RE.sub(r'\1 \2', s)
+            cleaned.append(s)
+        rows.append(cleaned)
+    return rows
 
 
 def _is_meaningful_table(rows: list[list[str]]) -> bool:
