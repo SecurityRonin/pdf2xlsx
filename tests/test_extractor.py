@@ -5,7 +5,7 @@ from collections import defaultdict
 from unittest.mock import patch, MagicMock
 from pdf2xlsx.extractor import (
     extract_tables, _merge_continuation_tables, _select_best_per_page,
-    _pages_with_drawn_lines, _IMG2TABLE_ZOOM,
+    _pages_with_drawn_lines, _IMG2TABLE_ZOOM, _score_tables,
 )
 from pdf2xlsx.models import ExtractedTable
 
@@ -277,6 +277,42 @@ def test_no_stuck_words_in_cells(general_ledger):
 # ---------------------------------------------------------------------------
 # img2table render zoom
 # ---------------------------------------------------------------------------
+
+def test_score_penalizes_stuck_word_cells():
+    """A table with stuck-word cells must score lower than a clean table with fewer cells."""
+    stuck = [ExtractedTable(page=1, index=0, source='bad', rows=[
+        ['Header', 'Value'],
+        ['DigitalLabsservesasthecompany-widehubforourdigitalinitiative', '1,234'],
+        ['AnotherLongStuckWordCellWithNoSpacesAtAllHere', '5,678'],
+    ])]
+    clean = [ExtractedTable(page=1, index=0, source='good', rows=[
+        ['Header', 'Value'],
+        ['Digital Labs', '1,234'],
+    ])]
+    assert _score_tables(stuck) < _score_tables(clean), (
+        "A result with stuck-word cells must score lower than a clean result, "
+        "so the clean engine wins even with fewer total cells."
+    )
+
+
+def test_select_best_per_page_rejects_stuck_words():
+    """_select_best_per_page must not choose an engine whose cells have stuck words."""
+    stuck_result = [ExtractedTable(page=2, index=0, source='stream', rows=[
+        ['Name', 'Amount'],
+        ['DigitalLabsservesasthecompany', '100'],
+        ['AnotherStuckWordCell', '200'],
+        ['YetAnotherStuckWordCellHere', '300'],
+    ])]
+    clean_result = [ExtractedTable(page=2, index=0, source='plumber', rows=[
+        ['Name', 'Amount'],
+        ['Digital Labs', '100'],
+    ])]
+    result = _select_best_per_page({'stream': stuck_result, 'plumber': clean_result})
+    assert len(result) == 1
+    assert result[0].source == 'plumber', (
+        f"Clean engine must win over stuck-word engine; got source={result[0].source!r}"
+    )
+
 
 def test_img2table_zoom_is_at_most_one():
     """_IMG2TABLE_ZOOM must be ≤ 1.0 to avoid 4× memory/time overhead."""
