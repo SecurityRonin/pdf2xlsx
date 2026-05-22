@@ -38,9 +38,13 @@ class _DETRWrapper:
         return out.logits, out.pred_boxes
 
 
-def _export(model_id: str, output_path: Path) -> None:
+def _export(model_id: str, output_path: Path, force: bool = False) -> None:
     import torch
     from transformers import AutoModelForObjectDetection
+
+    if output_path.exists() and not force:
+        print(f"  Already exported — skipping ({output_path})")
+        return
 
     print(f"  Downloading {model_id} …")
     raw = AutoModelForObjectDetection.from_pretrained(model_id)
@@ -94,6 +98,7 @@ def _export(model_id: str, output_path: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE)
+    parser.add_argument("--force", action="store_true", help="Re-export even if ONNX files exist")
     args = parser.parse_args()
 
     cache: Path = args.cache_dir
@@ -111,10 +116,10 @@ def main() -> None:
         sys.exit(1)
 
     print("Exporting detection model …")
-    _export(DETECT_MODEL_ID, cache / "detect.onnx")
+    _export(DETECT_MODEL_ID, cache / "detect.onnx", force=args.force)
 
     print("Exporting structure-recognition model …")
-    _export(STRUCTURE_MODEL_ID, cache / "structure.onnx")
+    _export(STRUCTURE_MODEL_ID, cache / "structure.onnx", force=args.force)
 
     print(f"\nDone. Models cached at: {cache}")
     print("Run pdf2xlsx normally — tabletransformer engine will activate automatically.")
