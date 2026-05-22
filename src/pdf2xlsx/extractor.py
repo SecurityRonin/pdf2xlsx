@@ -14,6 +14,15 @@ _STUCK_SPLIT_RE = re.compile(r'([a-z.,;:()])([A-Z])')  # split at camelCase or p
 _IMG2TABLE_ZOOM  = 1.0   # render zoom for img2table; 1.0 avoids 4× memory/time of 2.0
 _ENGINE_TIMEOUT  = 120   # seconds — thread-level safety net for all engines
 
+# Quality scorer constants
+_NUMERIC_CELL_RE = re.compile(
+    r'^[\$\(]?[\d,\.]{3,}[\)%]?$|^[—\-\–]$|^20[0-9]{2}$'
+)
+_PARTIAL_NUM_RE = re.compile(r'\d,\d{1,2}$')   # truncated comma-number e.g. "$15,8"
+_COL_OCC_THRESHOLD        = 0.30
+_COL_FRAG_THRESHOLD       = 0.30
+_TYPE_CONSISTENCY_MIN     = 0.60  # max(text_ratio, numeric_ratio) must exceed this
+
 
 def _clean_rows(raw: list[list]) -> list[list[str]]:
     rows = []
@@ -233,37 +242,75 @@ def _is_stuck_word(cell: str) -> bool:
     )
 
 
-def _score_tables(tables: list[ExtractedTable]) -> float:
-    """
-    Score a set of tables for a page.
+def _cell_quality(s: str) -> str:
+    """Classify a non-empty cell as 'fragment', 'numeric', or 'text'.
 
-    +1    per non-empty cell
-    +0.5  per row (rewards properly split rows over large merged cells)
-    -10   per stuck-word cell (words concatenated without spaces = bad engine output)
-    -sparsity penalty: when >60% of cells are empty AND cols>5 the engine has
-      hallucinated extra columns from text positions (pdfplumber wide-column blob).
-      Penalty = total_cells × sparsity so larger blobs are penalised more.
+    Only _PARTIAL_NUM_RE (a cell ending mid-comma-number like "$15,8") triggers
+    'fragment'.  Short integers like "1", "2", "29" are valid data and classified
+    as 'text' so they don't unfairly penalise single-digit data columns.
     """
+    if _PARTIAL_NUM_RE.search(s):
+        return 'fragment'
+    if _NUMERIC_CELL_RE.match(s):
+        return 'numeric'
+    return 'text'
+
+
+def _score_single_table(t: ExtractedTable) -> float:
+    """
+    Quality-first score: non_empty_cells × (good_col_ratio)²
+
+    A "good" column satisfies all three:
+      - occupancy        ≥ _COL_OCC_THRESHOLD     (column isn't mostly empty)
+      - frag+stuck ratio ≤ _COL_FRAG_THRESHOLD    (values are whole, not split)
+      - type_consistency ≥ _TYPE_CONSISTENCY_MIN  (column is predominantly one type)
+
+    Type consistency rejects columns that mix label text and financial numbers —
+    that pattern indicates rows from different logical tables got merged.
+    Squaring good_col_ratio amplifies structural badness non-linearly.
+    """
+    rows = t.rows
+    if not rows:
+        return 0.0
+    n_cols = max((len(r) for r in rows), default=0)
+    n_rows = len(rows)
+    if n_cols == 0:
+        return 0.0
+    padded = [list(r) + [''] * (n_cols - len(r)) for r in rows]
+    non_empty_total = 0
+    good_cols = 0
+    for c in range(n_cols):
+        col = [str(padded[r][c]).strip() for r in range(n_rows)]
+        non_empty = [x for x in col if x]
+        non_empty_total += len(non_empty)
+        if not non_empty:
+            continue
+        occupancy = len(non_empty) / n_rows
+        if occupancy < _COL_OCC_THRESHOLD:
+            continue
+        qualities = [_cell_quality(x) for x in non_empty]
+        frag_ratio = qualities.count('fragment') / len(qualities)
+        stuck_ratio = sum(1 for x in non_empty if _is_stuck_word(x)) / len(non_empty)
+        if frag_ratio + stuck_ratio * 2 > _COL_FRAG_THRESHOLD:
+            continue
+        # Type consistency: only meaningful with ≥3 cells (2-row tables have just
+        # 1 header + 1 datum, which always looks 50/50 and would be wrongly penalised).
+        if len(non_empty) >= 3:
+            text_ratio = qualities.count('text') / len(qualities)
+            num_ratio  = qualities.count('numeric') / len(qualities)
+            if max(text_ratio, num_ratio) < _TYPE_CONSISTENCY_MIN:
+                continue
+        good_cols += 1
+    if non_empty_total == 0:
+        return 0.0
+    good_col_ratio = good_cols / n_cols
+    return non_empty_total * good_col_ratio ** 2
+
+
+def _score_tables(tables: list[ExtractedTable]) -> float:
     if not tables:
         return 0.0
-    score = 0.0
-    for t in tables:
-        total_cells = sum(len(r) for r in t.rows)
-        n_cols = max((len(r) for r in t.rows), default=0)
-        if total_cells > 0 and n_cols > 5:
-            non_empty = sum(1 for r in t.rows for c in r if str(c).strip())
-            sparsity = 1.0 - non_empty / total_cells
-            if sparsity > 0.6:
-                score -= total_cells * sparsity
-        score += len(t.rows) * 0.5
-        for row in t.rows:
-            for cell in row:
-                s = str(cell).strip()
-                if s:
-                    score += 1.0
-                    if _is_stuck_word(s):
-                        score -= 10.0
-    return score
+    return sum(_score_single_table(t) for t in tables)
 
 
 def _has_stuck_words(tables: list[ExtractedTable]) -> bool:

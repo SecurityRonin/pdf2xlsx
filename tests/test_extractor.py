@@ -243,6 +243,46 @@ def test_engine_failure_does_not_crash(annual_report):
     assert isinstance(tables, list), "Must return a list even when engines fail"
 
 
+def test_score_penalises_fragmented_numbers():
+    """Split numbers (['$15,8','29']) must score lower than the same data as whole numbers."""
+    whole = ExtractedTable(page=1, index=0, source="a", rows=[
+        ["Description", "2023",     "2024"],
+        ["Row A",       "$15,829",  "$4,893"],
+        ["Row B",       "(10,697)", "(3,709)"],
+        ["Row C",       "—",        "3,969"],
+    ])
+    split = ExtractedTable(page=1, index=0, source="b", rows=[
+        ["Description", "",       "2023",  "",   "",  "", "2024",    ""],
+        ["Row A",       "",       "$15,8", "29", "",  "", "$4,893",  ""],
+        ["Row B",       "",       "(10,6", "97", ")", "", "(3,709)", ""],
+        ["Row C",       "",       "",      "—",  "",  "", "3,969",   ""],
+    ])
+    assert _score_tables([whole]) > _score_tables([split]), (
+        f"Whole-number table (score={_score_tables([whole]):.2f}) must beat "
+        f"split-number blob (score={_score_tables([split]):.2f})"
+    )
+
+
+def test_score_rewards_type_consistent_columns():
+    """A table with consistent column types must score higher than one with random type mixing."""
+    clean = ExtractedTable(page=1, index=0, source="a", rows=[
+        ["Label",       "2023",     "2024"],
+        ["Row A",       "$15,829",  "$4,893"],
+        ["Row B",       "(10,697)", "(3,709)"],
+        ["Row C",       "—",        "3,969"],
+    ])
+    mixed = ExtractedTable(page=1, index=0, source="b", rows=[
+        ["Label",   "2023",    "2024"],
+        ["2023",    "some text", "$4,893"],   # col 0 has year, col 1 has text in numeric col
+        ["foo bar", "(10,697)", "(3,709)"],   # col 0 has text starting with digits
+        ["$15,829", "—",        "3,969"],    # col 0 has dollar amount (numeric in text col)
+    ])
+    assert _score_tables([clean]) > _score_tables([mixed]), (
+        f"Type-consistent table (score={_score_tables([clean]):.2f}) must beat "
+        f"mixed-type table (score={_score_tables([mixed]):.2f})"
+    )
+
+
 def test_select_best_per_page_prefers_more_data():
     """_select_best_per_page must choose the engine with the most non-empty cells."""
     sparse = [ExtractedTable(page=1, index=0, source='a', rows=[
