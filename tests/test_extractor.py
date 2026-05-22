@@ -184,16 +184,13 @@ def test_camelot_engines_removed():
     )
 
 
-def test_all_three_engines_called(annual_report):
-    """extract_tables must invoke exactly the 3 MuPDF-based engine functions.
-
-    camelot_lattice and camelot_stream are removed: they depend on Ghostscript
-    (slow, hangs) while img2table already covers bordered-table detection via MuPDF.
-    """
+def test_all_four_engines_called(annual_report):
+    """extract_tables must invoke exactly the 4 engine functions concurrently."""
     called = []
     real_pdfplumber = __import__('pdf2xlsx.extractor', fromlist=['_extract_pdfplumber'])._extract_pdfplumber
     real_pymupdf    = __import__('pdf2xlsx.extractor', fromlist=['_extract_pymupdf'])._extract_pymupdf
     real_i2t        = __import__('pdf2xlsx.extractor', fromlist=['_extract_img2table'])._extract_img2table
+    real_tt         = __import__('pdf2xlsx.extractor', fromlist=['_extract_tabletransformer'])._extract_tabletransformer
 
     def spy(fn, name):
         def wrapper(*a, **kw):
@@ -201,13 +198,14 @@ def test_all_three_engines_called(annual_report):
             return fn(*a, **kw)
         return wrapper
 
-    with patch('pdf2xlsx.extractor._extract_pdfplumber', spy(real_pdfplumber, 'pdfplumber')), \
-         patch('pdf2xlsx.extractor._extract_pymupdf',    spy(real_pymupdf,    'pymupdf')), \
-         patch('pdf2xlsx.extractor._extract_img2table',  spy(real_i2t,        'img2table')):
+    with patch('pdf2xlsx.extractor._extract_pdfplumber',     spy(real_pdfplumber, 'pdfplumber')), \
+         patch('pdf2xlsx.extractor._extract_pymupdf',         spy(real_pymupdf,    'pymupdf')), \
+         patch('pdf2xlsx.extractor._extract_img2table',        spy(real_i2t,        'img2table')), \
+         patch('pdf2xlsx.extractor._extract_tabletransformer', spy(real_tt,         'tabletransformer')):
         extract_tables(annual_report)
 
-    assert set(called) == {'pdfplumber', 'pymupdf', 'img2table'}, (
-        f"Expected exactly 3 engines called, got: {set(called)}"
+    assert set(called) == {'pdfplumber', 'pymupdf', 'img2table', 'tabletransformer'}, (
+        f"Expected exactly 4 engines called, got: {set(called)}"
     )
 
 
