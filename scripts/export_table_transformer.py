@@ -5,7 +5,9 @@ Export Microsoft Table Transformer models to ONNX.
 Run once to populate the model cache; thereafter only onnxruntime is needed.
 
 Requirements (install in a temporary env, not the main venv):
-    pip install torch torchvision transformers
+    pip install torch torchvision transformers onnxscript
+
+  onnxscript is required by PyTorch 2.5+ even when using the legacy exporter path.
 
 Usage:
     python scripts/export_table_transformer.py
@@ -61,21 +63,31 @@ def _export(model_id: str, output_path: Path) -> None:
     dummy_pm = torch.ones(1, 800, 800, dtype=torch.long)
 
     print(f"  Exporting to ONNX → {output_path}")
+    export_kwargs = dict(
+        input_names=["pixel_values", "pixel_mask"],
+        output_names=["logits", "pred_boxes"],
+        dynamic_axes={
+            "pixel_values": {0: "batch", 2: "height", 3: "width"},
+            "pixel_mask":   {0: "batch", 1: "height", 2: "width"},
+            "logits":       {0: "batch"},
+            "pred_boxes":   {0: "batch"},
+        },
+        opset_version=14,
+    )
     with torch.no_grad():
-        torch.onnx.export(
-            wrapper,
-            (dummy_pv, dummy_pm),
-            str(output_path),
-            input_names=["pixel_values", "pixel_mask"],
-            output_names=["logits", "pred_boxes"],
-            dynamic_axes={
-                "pixel_values": {0: "batch", 2: "height", 3: "width"},
-                "pixel_mask":   {0: "batch", 1: "height", 2: "width"},
-                "logits":       {0: "batch"},
-                "pred_boxes":   {0: "batch"},
-            },
-            opset_version=14,
-        )
+        try:
+            # PyTorch ≥ 2.5: dynamo=False forces the legacy TorchScript exporter
+            # and avoids the onnxscript import in the new dynamo-based path.
+            torch.onnx.export(
+                wrapper, (dummy_pv, dummy_pm), str(output_path),
+                dynamo=False, **export_kwargs,
+            )
+        except TypeError:
+            # Older PyTorch that doesn't accept dynamo= keyword
+            torch.onnx.export(
+                wrapper, (dummy_pv, dummy_pm), str(output_path),
+                **export_kwargs,
+            )
     print(f"  Saved {output_path} ({output_path.stat().st_size // 1_000_000} MB)")
 
 
@@ -87,12 +99,15 @@ def main() -> None:
     cache: Path = args.cache_dir
     cache.mkdir(parents=True, exist_ok=True)
 
-    try:
-        import torch
-        import transformers
-    except ImportError as e:
-        print(f"ERROR: {e}")
-        print("Install export deps:  pip install torch torchvision transformers")
+    missing = []
+    for pkg in ("torch", "transformers", "onnxscript"):
+        try:
+            __import__(pkg)
+        except ImportError:
+            missing.append(pkg)
+    if missing:
+        print(f"ERROR: missing packages: {', '.join(missing)}")
+        print("Install:  pip install torch torchvision transformers onnxscript")
         sys.exit(1)
 
     print("Exporting detection model …")
