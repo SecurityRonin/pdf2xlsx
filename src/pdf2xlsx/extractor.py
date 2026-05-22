@@ -6,6 +6,7 @@ import pdfplumber
 import fitz  # pymupdf
 from pdf2xlsx.models import ExtractedTable
 from pdf2xlsx.postprocess import postprocess_rows
+from pdf2xlsx.engines.tabletransformer import _extract_tabletransformer
 
 _YEAR_RE = re.compile(r'^20\d\d$')
 _LARGE_NUM_RE = re.compile(r'^[\d,]{4,}$')   # comma-formatted numbers ≥4 digits
@@ -370,10 +371,11 @@ def extract_tables(
         raise FileNotFoundError(f"PDF not found: {path}")
 
     engine_fns: dict[str, Callable] = {
-        "pdfplumber": lambda: _merge_continuation_tables(
-                          _extract_pdfplumber(path, on_progress=on_progress)),
-        "pymupdf":    lambda: _extract_pymupdf(path),
-        "img2table":  lambda: _extract_img2table(path),
+        "pdfplumber":       lambda: _merge_continuation_tables(
+                                _extract_pdfplumber(path, on_progress=on_progress)),
+        "pymupdf":          lambda: _extract_pymupdf(path),
+        "img2table":        lambda: _extract_img2table(path),
+        "tabletransformer": lambda: _extract_tabletransformer(path),
     }
 
     # page -> (best_score, tables) seen so far across completed engines
@@ -395,7 +397,7 @@ def extract_tables(
                     on_table(t)
 
     engine_results: dict[str, list[ExtractedTable]] = {}
-    executor = ThreadPoolExecutor(max_workers=3)
+    executor = ThreadPoolExecutor(max_workers=4)
     futures = {executor.submit(fn): name for name, fn in engine_fns.items()}
     try:
         for future in as_completed(futures, timeout=_ENGINE_TIMEOUT):
