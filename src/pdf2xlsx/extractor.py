@@ -237,14 +237,24 @@ def _score_tables(tables: list[ExtractedTable]) -> float:
     """
     Score a set of tables for a page.
 
-    +1  per non-empty cell
-    +0.5 per row (rewards properly split rows over large merged cells)
-    -10  per stuck-word cell (words concatenated without spaces = bad engine output)
+    +1    per non-empty cell
+    +0.5  per row (rewards properly split rows over large merged cells)
+    -10   per stuck-word cell (words concatenated without spaces = bad engine output)
+    -sparsity penalty: when >60% of cells are empty AND cols>5 the engine has
+      hallucinated extra columns from text positions (pdfplumber wide-column blob).
+      Penalty = total_cells × sparsity so larger blobs are penalised more.
     """
     if not tables:
         return 0.0
     score = 0.0
     for t in tables:
+        total_cells = sum(len(r) for r in t.rows)
+        n_cols = max((len(r) for r in t.rows), default=0)
+        if total_cells > 0 and n_cols > 5:
+            non_empty = sum(1 for r in t.rows for c in r if str(c).strip())
+            sparsity = 1.0 - non_empty / total_cells
+            if sparsity > 0.6:
+                score -= total_cells * sparsity
         score += len(t.rows) * 0.5
         for row in t.rows:
             for cell in row:

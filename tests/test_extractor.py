@@ -470,3 +470,52 @@ def test_engine_timeout_does_not_block(annual_report):
     assert isinstance(tables, list), "Must still return a list when an engine times out"
 
 
+# ---------------------------------------------------------------------------
+# Column-sparsity scoring — prevents pdfplumber's wide-column blobs winning
+# ---------------------------------------------------------------------------
+
+def test_score_penalises_wide_sparse_table():
+    """A table with >60% empty cells and >5 columns must score below a compact table."""
+    # Simulate pdfplumber's 8-column blob: numbers split across cells, ~74% empty
+    # (matches the real annual_report p.203 pattern where most cols are padding)
+    blob = ExtractedTable(page=1, index=0, source="pdfplumber", rows=[
+        ["Header row",  "", "", "As", "of", "Ju", "ly", "31,"],   # 5/8 non-empty
+        ["Row A",       "", "", "$15,8", "29", "", "", "$4,893"],  # 4/8
+        ["Row B",       "", "", "(10,6", "97", ")", "", "(3,709)"],# 5/8
+        ["Row C",       "", "", "",  "—", "", "", "3,969"],        # 3/8
+        ["Row D",       "", "", "$4,8", "93", "", "", "$5,153"],   # 4/8
+        ["Prose note",  "", "", "", "", "", "", ""],                # 1/8
+        ["More prose",  "", "", "", "", "", "", ""],                # 1/8
+        ["Even more",   "", "", "", "", "", "", ""],                # 1/8
+        ["Section hdr", "", "", "", "", "", "", ""],                # 1/8
+        ["Row E",       "", "", "$1,9", "15", "", "", "701"],      # 4/8
+    ])
+    # 10r×8c=80 cells; non-empty≈29 → sparsity≈64% — triggers the penalty
+    # Compact 3-column result from a better engine
+    compact = ExtractedTable(page=1, index=0, source="pymupdf", rows=[
+        ["As of July 31,", "2023",    "2024"],
+        ["Row A",          "$15,829", "$4,893"],
+        ["Row B",          "(10,697)","(3,709)"],
+        ["Row C",          "—",       "3,969"],
+    ])
+    blob_score    = _score_tables([blob])
+    compact_score = _score_tables([compact])
+    assert compact_score > blob_score, (
+        f"Compact 3-col table (score={compact_score:.1f}) must beat "
+        f"sparse 8-col blob (score={blob_score:.1f})"
+    )
+
+
+def test_annual_report_p203_not_a_single_blob(annual_report):
+    """Page 203 has 3 distinct tables; the extractor must not return one 8-column blob."""
+    tables = extract_tables(annual_report)
+    p203 = [t for t in tables if t.page == 203]
+    assert p203, "Page 203 must have at least one extracted table"
+    for t in p203:
+        n_cols = max(len(r) for r in t.rows)
+        assert n_cols <= 6, (
+            f"Page 203 table has {n_cols} columns — looks like pdfplumber's "
+            f"wide-column blob; expected ≤6 clean columns"
+        )
+
+
