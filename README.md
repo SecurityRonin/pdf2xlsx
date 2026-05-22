@@ -106,4 +106,4 @@ Binary releases are built via GitHub Actions on native runners — no cross-comp
 
 ---
 
-© 2026 Security Ronin Ltd · [Apache-2.0](LICENSE)
+[Privacy Policy](https://securityronin.github.io/pdf2xlsx/privacy/) · [Terms of Service](https://securityronin.github.io/pdf2xlsx/terms/) · © 2026 Security Ronin Ltd
